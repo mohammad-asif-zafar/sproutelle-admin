@@ -256,6 +256,21 @@ CREATE TABLE IF NOT EXISTS public.game_versions (
 
 ALTER TABLE public.game_versions ENABLE ROW LEVEL SECURITY;
 
+-- Homescreen Explorer Cards
+CREATE TABLE IF NOT EXISTS public.homescreen_explorer (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title_name TEXT NOT NULL,
+    title_image_asset_id UUID REFERENCES public.media_assets(id) ON DELETE SET NULL,
+    background_color TEXT NOT NULL DEFAULT '#FFF0F3',
+    category_id UUID REFERENCES public.game_categories(id) ON DELETE SET NULL,
+    sort_order INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.homescreen_explorer ENABLE ROW LEVEL SECURITY;
+
 --------------------------------------------------------------------------------
 -- 3. EXPLICIT TABLE GRANTS & PERMISSIONS
 --------------------------------------------------------------------------------
@@ -269,8 +284,8 @@ REVOKE ALL ON TABLE public.question_options FROM PUBLIC, anon;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.question_options TO authenticated, service_role;
 
 -- Grant table level permissions for content delivery & management
-GRANT SELECT ON TABLE public.media_assets, public.game_categories, public.games, public.game_levels, public.questions, public.activity_media, public.game_versions TO anon, authenticated, service_role;
-GRANT INSERT, UPDATE, DELETE ON TABLE public.media_assets, public.game_categories, public.games, public.game_levels, public.questions, public.activity_media, public.game_versions TO authenticated, service_role;
+GRANT SELECT ON TABLE public.media_assets, public.game_categories, public.games, public.game_levels, public.questions, public.activity_media, public.game_versions, public.homescreen_explorer TO anon, authenticated, service_role;
+GRANT INSERT, UPDATE, DELETE ON TABLE public.media_assets, public.game_categories, public.games, public.game_levels, public.questions, public.activity_media, public.game_versions, public.homescreen_explorer TO authenticated, service_role;
 
 --------------------------------------------------------------------------------
 -- 4. PUBLIC CONTENT ACCESS VIEW & PUBLISHED MEDIA HELPER
@@ -327,6 +342,12 @@ BEGIN
         WHERE ma.file_path = p_file_path
           AND ma.bucket_name = 'game-assets'
           AND g.is_published = TRUE
+    ) OR EXISTS (
+        SELECT 1 FROM public.media_assets ma
+        JOIN public.homescreen_explorer he ON he.title_image_asset_id = ma.id
+        WHERE ma.file_path = p_file_path
+          AND ma.bucket_name = 'game-assets'
+          AND he.is_active = TRUE
     );
 END;
 $$;
@@ -529,6 +550,24 @@ CREATE POLICY "Admins can update game_versions" ON public.game_versions
     FOR UPDATE USING (public.is_admin()) WITH CHECK (public.is_admin());
 
 CREATE POLICY "Admins can delete game_versions" ON public.game_versions
+    FOR DELETE USING (public.is_admin());
+
+-- Homescreen Explorer Policies
+DROP POLICY IF EXISTS "Public or Admin select homescreen_explorer" ON public.homescreen_explorer;
+DROP POLICY IF EXISTS "Admins can insert homescreen_explorer" ON public.homescreen_explorer;
+DROP POLICY IF EXISTS "Admins can update homescreen_explorer" ON public.homescreen_explorer;
+DROP POLICY IF EXISTS "Admins can delete homescreen_explorer" ON public.homescreen_explorer;
+
+CREATE POLICY "Public or Admin select homescreen_explorer" ON public.homescreen_explorer
+    FOR SELECT USING (public.is_admin() OR is_active = TRUE);
+
+CREATE POLICY "Admins can insert homescreen_explorer" ON public.homescreen_explorer
+    FOR INSERT WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can update homescreen_explorer" ON public.homescreen_explorer
+    FOR UPDATE USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admins can delete homescreen_explorer" ON public.homescreen_explorer
     FOR DELETE USING (public.is_admin());
 
 --------------------------------------------------------------------------------

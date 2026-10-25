@@ -126,6 +126,21 @@ export interface GameVersion {
   created_at: string;
 }
 
+export interface HomescreenExplorer {
+  id: string;
+  title_name: string;
+  title_image_asset_id?: string | null;
+  background_color: string;
+  category_id?: string | null;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  // Joined media / category
+  title_image_asset?: MediaAsset | null;
+  category?: GameCategory | null;
+}
+
 export type TableName =
   | 'media_assets'
   | 'game_categories'
@@ -135,6 +150,7 @@ export type TableName =
   | 'question_options'
   | 'activity_media'
   | 'game_versions'
+  | 'homescreen_explorer'
   | 'admin_users';
 
 export interface DashboardMetrics {

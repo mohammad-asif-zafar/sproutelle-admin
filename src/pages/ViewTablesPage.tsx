@@ -172,6 +172,18 @@ const TABLE_SCHEMAS: Record<TableName, TableSchema> = {
       { key: 'is_admin', label: 'Is Administrator', type: 'boolean', defaultValue: true },
     ],
   },
+  homescreen_explorer: {
+    tableName: 'homescreen_explorer',
+    label: 'Homescreen Explorer',
+    fields: [
+      { key: 'title_name', label: 'Title Name', type: 'text', required: true, placeholder: 'e.g. Letters & Reading' },
+      { key: 'background_color', label: 'Background Color', type: 'text', required: true, defaultValue: '#FFECEE' },
+      { key: 'title_image_asset_id', label: 'Title Image Asset ID (UUID)', type: 'text' },
+      { key: 'category_id', label: 'Linked Category ID (UUID)', type: 'text' },
+      { key: 'sort_order', label: 'Sort Order', type: 'number', defaultValue: 1 },
+      { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
+    ],
+  },
 };
 
 export const ViewTablesPage: React.FC = () => {
@@ -187,6 +199,7 @@ export const ViewTablesPage: React.FC = () => {
     { name: 'question_options', label: 'Question Options' },
     { name: 'activity_media', label: 'Activity Media' },
     { name: 'game_versions', label: 'Game Versions' },
+    { name: 'homescreen_explorer', label: 'Homescreen Explorer' },
   ];
 
   // Records state
@@ -243,6 +256,9 @@ export const ViewTablesPage: React.FC = () => {
           { id: 'v-1', version_number: '1.0.0', release_notes: 'Initial release', min_app_version: '1.0.0', is_active: true, created_at: new Date().toISOString() },
         ],
         admin_users: [],
+        homescreen_explorer: [
+          { id: 'exp-1', title_name: 'Letters & Reading', background_color: '#FFECEE', sort_order: 1, is_active: true, created_at: new Date().toISOString() },
+        ],
       };
 
       setRecords(mockData[tableName] || []);
