@@ -136,7 +136,7 @@ export interface HomescreenExplorer {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  // Joined media / category
+  // Joined relations
   title_image_asset?: MediaAsset | null;
   category?: GameCategory | null;
 }

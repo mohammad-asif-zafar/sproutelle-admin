@@ -9,6 +9,7 @@ import {
   Sparkles,
   BookOpen,
   UserCheck,
+  Compass,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { SetupBanner } from '../Common/SetupBanner';
@@ -24,6 +25,7 @@ export const AppLayout: React.FC = () => {
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { to: '/explorer', label: 'Homescreen Explorer', icon: Compass },
     { to: '/upload', label: 'Upload Files & Media', icon: UploadCloud },
     { to: '/questions/new', label: 'Add Question', icon: FileQuestion },
     { to: '/tables', label: 'View Database Tables', icon: Database },
