@@ -184,6 +184,19 @@ const TABLE_SCHEMAS: Record<TableName, TableSchema> = {
       { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
     ],
   },
+  homescreen_explorer_subcategories: {
+    tableName: 'homescreen_explorer_subcategories',
+    label: 'Explorer Subcategories',
+    fields: [
+      { key: 'explorer_id', label: 'Parent Explorer ID (UUID)', type: 'text', required: true, placeholder: 'Explorer Card UUID' },
+      { key: 'name', label: 'Subcategory Name', type: 'text', required: true, placeholder: 'e.g. Phonics & Letters' },
+      { key: 'background_color', label: 'Background Color', type: 'text', required: true, defaultValue: '#FFF0F3' },
+      { key: 'image_asset_id', label: 'Image Asset ID (UUID)', type: 'text' },
+      { key: 'category_id', label: 'Linked Category ID (UUID)', type: 'text' },
+      { key: 'sort_order', label: 'Sort Order', type: 'number', defaultValue: 1 },
+      { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
+    ],
+  },
 };
 
 export const ViewTablesPage: React.FC = () => {
@@ -200,6 +213,7 @@ export const ViewTablesPage: React.FC = () => {
     { name: 'activity_media', label: 'Activity Media' },
     { name: 'game_versions', label: 'Game Versions' },
     { name: 'homescreen_explorer', label: 'Homescreen Explorer' },
+    { name: 'homescreen_explorer_subcategories', label: 'Explorer Subcategories' },
   ];
 
   // Records state
@@ -258,6 +272,9 @@ export const ViewTablesPage: React.FC = () => {
         admin_users: [],
         homescreen_explorer: [
           { id: 'exp-1', title_name: 'Letters & Reading', background_color: '#FFECEE', sort_order: 1, is_active: true, created_at: new Date().toISOString() },
+        ],
+        homescreen_explorer_subcategories: [
+          { id: 'sub-1', explorer_id: 'exp-1', name: 'Phonics & Letters', background_color: '#FFECEE', sort_order: 1, is_active: true, created_at: new Date().toISOString() },
         ],
       };
 
