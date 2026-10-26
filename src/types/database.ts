@@ -40,6 +40,7 @@ export interface Game {
   slug: string;
   description?: string | null;
   game_type: 'multiple_choice' | 'matching' | 'image_selection' | 'audio_recognition' | 'true_false' | string;
+  config?: Record<string, unknown> | null;
   is_published: boolean;
   sort_order: number;
   created_at: string;
@@ -160,6 +161,29 @@ export interface HomescreenExplorerSubcategory {
   explorer?: HomescreenExplorer | null;
 }
 
+export interface GameRelease {
+  id: string;
+  game_id: string;
+  version_number: string;
+  pack_data: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface SubcategoryGameAssignment {
+  id: string;
+  subcategory_id: string;
+  game_id: string;
+  enabled_patterns: string[];
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  // Joined relations
+  game?: Game | null;
+  subcategory?: HomescreenExplorerSubcategory | null;
+}
+
 export type TableName =
   | 'media_assets'
   | 'game_categories'
@@ -171,6 +195,8 @@ export type TableName =
   | 'game_versions'
   | 'homescreen_explorer'
   | 'homescreen_explorer_subcategories'
+  | 'subcategory_games'
+  | 'game_releases'
   | 'admin_users';
 
 export interface DashboardMetrics {

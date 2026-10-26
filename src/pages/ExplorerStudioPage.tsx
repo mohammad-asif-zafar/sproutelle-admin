@@ -10,9 +10,11 @@ import {
   Eye,
   FolderTree,
   ArrowLeft,
+  Gamepad2,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { HomescreenExplorer, HomescreenExplorerSubcategory, MediaAsset, GameCategory } from '../types/database';
+import type { HomescreenExplorer, HomescreenExplorerSubcategory, MediaAsset, GameCategory, Game, SubcategoryGameAssignment } from '../types/database';
+import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { Modal } from '../components/Common/Modal';
 import { MediaSelectorModal } from '../components/Media/MediaSelectorModal';
 import { MediaPreviewTile } from '../components/Media/MediaPreviewTile';
@@ -89,6 +91,14 @@ export const ExplorerStudioPage: React.FC = () => {
   );
   const [categories, setCategories] = useState<GameCategory[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
+  const [allGames, setAllGames] = useState<Game[]>(
+    !isSupabaseConfigured
+      ? [
+          { id: 'game-1', name: 'Alphabet Safari', slug: 'alphabet-safari', game_type: 'multiple_choice', is_published: true, sort_order: 1, created_at: '', updated_at: '' },
+          { id: 'game-2', name: 'Counting Meadow', slug: 'counting-meadow', game_type: 'image_selection', is_published: true, sort_order: 2, created_at: '', updated_at: '' },
+        ]
+      : []
+  );
   const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -129,21 +139,29 @@ export const ExplorerStudioPage: React.FC = () => {
   const [subFormError, setSubFormError] = useState<string | null>(null);
   const [subSubmitting, setSubSubmitting] = useState<boolean>(false);
 
+  // Assigned Games for Subcategory Editor
+  const [assignedGames, setAssignedGames] = useState<Array<{ game_id: string; enabled_patterns: string[]; sort_order: number; is_active: boolean }>>([]);
+
   const loadData = useCallback(async () => {
     if (!isSupabaseConfigured) {
+      setAllGames([
+        { id: 'game-1', name: 'Alphabet Safari', slug: 'alphabet-safari', game_type: 'multiple_choice', is_published: true, sort_order: 1, created_at: '', updated_at: '' },
+        { id: 'game-2', name: 'Counting Meadow', slug: 'counting-meadow', game_type: 'image_selection', is_published: true, sort_order: 2, created_at: '', updated_at: '' },
+      ]);
       return;
     }
 
     try {
       setPageError(null);
 
-      const [expRes, catRes, mediaRes] = await Promise.all([
+      const [expRes, catRes, mediaRes, gamesRes] = await Promise.all([
         supabase
           .from('homescreen_explorer')
           .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
           .order('sort_order', { ascending: true }),
         supabase.from('game_categories').select('*').order('sort_order'),
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
+        supabase.from('games').select('*').order('sort_order'),
       ]);
 
       if (expRes.error) {
@@ -155,10 +173,13 @@ export const ExplorerStudioPage: React.FC = () => {
 
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
       if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
+      if (gamesRes.data) setAllGames(gamesRes.data as Game[]);
     } catch (err) {
       console.error('Failed loading explorer items:', err);
       const msg = err instanceof Error ? err.message : 'Database query failed.';
       setPageError(msg);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -171,13 +192,14 @@ export const ExplorerStudioPage: React.FC = () => {
 
     async function initData() {
       try {
-        const [expRes, catRes, mediaRes] = await Promise.all([
+        const [expRes, catRes, mediaRes, gamesRes] = await Promise.all([
           supabase
             .from('homescreen_explorer')
             .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
             .order('sort_order', { ascending: true }),
           supabase.from('game_categories').select('*').order('sort_order'),
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
+          supabase.from('games').select('*').order('sort_order'),
         ]);
 
         if (!isMounted) return;
@@ -191,6 +213,7 @@ export const ExplorerStudioPage: React.FC = () => {
 
         if (catRes.data) setCategories(catRes.data as GameCategory[]);
         if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
+        if (gamesRes.data) setAllGames(gamesRes.data as Game[]);
       } catch (err) {
         console.error('Failed loading explorer items:', err);
         const msg = err instanceof Error ? err.message : 'Database query failed.';
@@ -369,7 +392,7 @@ export const ExplorerStudioPage: React.FC = () => {
   };
 
   // Subcategory CRUD Handlers
-  const openCreateSubModal = () => {
+  const openCreateSubModal = async () => {
     setEditingSub(null);
     setSubName('');
     setSubSelectedMediaAsset(null);
@@ -377,11 +400,12 @@ export const ExplorerStudioPage: React.FC = () => {
     setSubCategoryId('');
     setSubSortOrder(subcategories.length + 1);
     setSubIsActive(true);
+    setAssignedGames([]);
     setSubFormError(null);
     setSubModalOpen(true);
   };
 
-  const openEditSubModal = (sub: HomescreenExplorerSubcategory) => {
+  const openEditSubModal = async (sub: HomescreenExplorerSubcategory) => {
     setEditingSub(sub);
     setSubName(sub.name);
     setSubSelectedMediaAsset(sub.image_asset || mediaAssets.find((m) => m.id === sub.image_asset_id) || null);
@@ -390,6 +414,33 @@ export const ExplorerStudioPage: React.FC = () => {
     setSubSortOrder(sub.sort_order || 1);
     setSubIsActive(sub.is_active ?? true);
     setSubFormError(null);
+    setAssignedGames([]);
+
+    // Load assigned games for this subcategory with strict error handling
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('subcategory_games')
+          .select('*')
+          .eq('subcategory_id', sub.id)
+          .order('sort_order', { ascending: true });
+        if (error) throw error;
+        if (data) {
+          setAssignedGames(
+            (data as SubcategoryGameAssignment[]).map((ag) => ({
+              game_id: ag.game_id,
+              enabled_patterns: ag.enabled_patterns || [],
+              sort_order: ag.sort_order,
+              is_active: ag.is_active,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Failed loading subcategory game assignments:', err);
+        setSubFormError('Failed loading existing game assignments for this subcategory. Saving is blocked until loaded successfully.');
+      }
+    }
+
     setSubModalOpen(true);
   };
 
@@ -402,20 +453,27 @@ export const ExplorerStudioPage: React.FC = () => {
       return;
     }
 
+    // Validate duplicate game assignments
+    const gameIds = assignedGames.map((ag) => ag.game_id);
+    const uniqueGameIds = new Set(gameIds);
+    if (uniqueGameIds.size !== gameIds.length) {
+      setSubFormError('Duplicate game assignments are not allowed in the same subcategory.');
+      return;
+    }
+
     if (!managingExplorer) return;
 
-    const payload = {
-      explorer_id: managingExplorer.id,
-      name: subName.trim(),
-      image_asset_id: subSelectedMediaAsset?.id || null,
-      background_color: subBackgroundColor,
-      category_id: subCategoryId || null,
-      sort_order: subSortOrder,
-      is_active: subIsActive,
-      updated_at: new Date().toISOString(),
-    };
-
     if (!isSupabaseConfigured) {
+      const payload = {
+        explorer_id: managingExplorer.id,
+        name: subName.trim(),
+        image_asset_id: subSelectedMediaAsset?.id || null,
+        background_color: subBackgroundColor,
+        category_id: subCategoryId || null,
+        sort_order: subSortOrder,
+        is_active: subIsActive,
+        updated_at: new Date().toISOString(),
+      };
       if (editingSub) {
         setSubcategories((prev) =>
           prev.map((s) => (s.id === editingSub.id ? { ...s, ...payload, image_asset: subSelectedMediaAsset } : s))
@@ -435,21 +493,34 @@ export const ExplorerStudioPage: React.FC = () => {
 
     try {
       setSubSubmitting(true);
-      if (editingSub) {
-        const { error } = await supabase
-          .from('homescreen_explorer_subcategories')
-          .update(payload)
-          .eq('id', editingSub.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('homescreen_explorer_subcategories').insert(payload);
-        if (error) throw error;
-      }
+      const subId = editingSub?.id || null;
+
+      const normalizedAssignments = assignedGames.map((ag, idx) => ({
+        game_id: ag.game_id,
+        enabled_patterns: ag.enabled_patterns,
+        sort_order: idx + 1,
+        is_active: ag.is_active,
+      }));
+
+      const { data, error } = await supabase.rpc('save_subcategory_with_games', {
+        p_subcategory_id: subId,
+        p_explorer_id: managingExplorer.id,
+        p_name: subName.trim(),
+        p_image_asset_id: subSelectedMediaAsset?.id || null,
+        p_background_color: subBackgroundColor,
+        p_category_id: subCategoryId || null,
+        p_sort_order: subSortOrder,
+        p_is_active: subIsActive,
+        p_assignments: normalizedAssignments,
+      });
+
+      if (error) throw error;
+      if (!data) throw new Error('Atomic subcategory save transaction returned null/false.');
 
       await loadSubcategories(managingExplorer.id);
       setSubModalOpen(false);
     } catch (err) {
-      console.error('Failed saving subcategory:', err);
+      console.error('Failed saving subcategory atomically:', err);
       const msg = err instanceof Error ? err.message : 'Database save failed.';
       setSubFormError(msg);
     } finally {
@@ -658,12 +729,13 @@ export const ExplorerStudioPage: React.FC = () => {
           )}
         </div>
 
-        {/* Add / Edit Subcategory Modal */}
+        {/* Add / Edit Subcategory Modal with Game & Pattern Selection */}
         {subModalOpen && (
           <Modal
             isOpen={subModalOpen}
             onClose={() => setSubModalOpen(false)}
-            title={editingSub ? 'Edit Subcategory' : 'Add New Subcategory'}
+            title={editingSub ? 'Edit Subcategory & Games' : 'Add New Subcategory & Games'}
+            maxWidth="750px"
           >
             {subFormError && (
               <div
@@ -815,6 +887,144 @@ export const ExplorerStudioPage: React.FC = () => {
                   </select>
                 </div>
 
+                {/* Games in this Subcategory Section */}
+                <div style={{ backgroundColor: 'var(--color-surface-muted)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <h4 style={{ fontSize: '0.875rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Gamepad2 size={16} color="var(--color-primary)" /> Games & Patterns in this Subcategory
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const unassignedGames = allGames.filter((g) => !assignedGames.some((ag) => ag.game_id === g.id));
+                        if (unassignedGames.length === 0) {
+                          alert('All available games are already assigned to this subcategory.');
+                          return;
+                        }
+                        const targetGame = unassignedGames[0];
+                        const engineDef = GAME_ENGINE_REGISTRY[targetGame.game_type as EngineType] || GAME_ENGINE_REGISTRY.guess_game;
+                        setAssignedGames((prev) => [
+                          ...prev,
+                          {
+                            game_id: targetGame.id,
+                            enabled_patterns: engineDef.supportedQuestionTypes,
+                            sort_order: prev.length + 1,
+                            is_active: true,
+                          },
+                        ]);
+                      }}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      <Plus size={14} /> Assign Game
+                    </button>
+                  </div>
+
+                  {assignedGames.length === 0 ? (
+                    <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', padding: '0.5rem 0' }}>
+                      No games assigned to this subcategory yet. Click &ldquo;Assign Game&rdquo; to add learning activities.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      {assignedGames.map((ag, index) => {
+                        const gameRecord = allGames.find((g) => g.id === ag.game_id);
+                        const engineType = (gameRecord?.game_type as EngineType) || 'guess_game';
+                        const engineDef = GAME_ENGINE_REGISTRY[engineType] || GAME_ENGINE_REGISTRY.guess_game;
+
+                        return (
+                          <div
+                            key={ag.game_id}
+                            style={{
+                              backgroundColor: 'var(--color-surface)',
+                              border: '1px solid var(--color-border)',
+                              borderRadius: 'var(--radius-md)',
+                              padding: '0.875rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.8125rem', color: 'var(--color-primary)' }}>#{index + 1}</span>
+                                <select
+                                  className="form-select form-select-sm"
+                                  value={ag.game_id}
+                                  onChange={(e) => {
+                                    const newGameId = e.target.value;
+                                    setAssignedGames((prev) =>
+                                      prev.map((item, idx) => (idx === index ? { ...item, game_id: newGameId } : item))
+                                    );
+                                  }}
+                                  style={{ width: '220px' }}
+                                >
+                                  {allGames.map((g) => (
+                                    <option key={g.id} value={g.id}>{g.name} ({g.game_type})</option>
+                                  ))}
+                                </select>
+                                <span className="badge badge-primary" style={{ fontSize: '0.7rem' }}>{engineDef.name}</span>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <label style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={ag.is_active}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setAssignedGames((prev) =>
+                                        prev.map((item, idx) => (idx === index ? { ...item, is_active: checked } : item))
+                                      );
+                                    }}
+                                  /> Active
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssignedGames((prev) => prev.filter((_, idx) => idx !== index));
+                                  }}
+                                  className="btn btn-danger btn-sm"
+                                  title="Remove Assignment"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Supported Patterns Selection for this Engine */}
+                            <div style={{ paddingLeft: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Supported Patterns:</span>
+                              {engineDef.supportedQuestionTypes.map((pattern) => {
+                                const isSelected = ag.enabled_patterns.includes(pattern);
+                                return (
+                                  <label key={pattern} style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', backgroundColor: 'var(--color-surface-muted)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setAssignedGames((prev) =>
+                                          prev.map((item, idx) => {
+                                            if (idx !== index) return item;
+                                            const patterns = checked
+                                              ? [...item.enabled_patterns, pattern]
+                                              : item.enabled_patterns.filter((p) => p !== pattern);
+                                            return { ...item, enabled_patterns: patterns };
+                                          })
+                                        );
+                                      }}
+                                    />
+                                    {pattern.replace('_', ' ')}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 {/* Sort Order & Status */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div className="input-group">
@@ -849,8 +1059,12 @@ export const ExplorerStudioPage: React.FC = () => {
                   >
                     Cancel
                   </button>
-                  <button type="submit" className="btn btn-primary" disabled={subSubmitting}>
-                    {subSubmitting ? 'Saving...' : 'Save Subcategory'}
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={subSubmitting || (subFormError !== null && subFormError.includes('Failed loading'))}
+                  >
+                    {subSubmitting ? 'Saving...' : 'Save Subcategory & Games'}
                   </button>
                 </div>
               </div>
@@ -869,7 +1083,7 @@ export const ExplorerStudioPage: React.FC = () => {
           />
         )}
 
-        {/* Delete Subcategory Confirmation Modal */}
+        {/* Delete Confirmation Modal */}
         {deleteConfirmSub && (
           <Modal
             isOpen={Boolean(deleteConfirmSub)}

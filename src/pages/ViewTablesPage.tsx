@@ -199,6 +199,25 @@ const TABLE_SCHEMAS: Record<TableName, TableSchema> = {
       { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
     ],
   },
+  game_releases: {
+    tableName: 'game_releases',
+    label: 'Game Content Releases',
+    fields: [
+      { key: 'game_id', label: 'Game ID (UUID)', type: 'text', required: true },
+      { key: 'version_number', label: 'Version Number', type: 'text', required: true, defaultValue: '1.0.0' },
+      { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
+    ],
+  },
+  subcategory_games: {
+    tableName: 'subcategory_games',
+    label: 'Subcategory Game Assignments',
+    fields: [
+      { key: 'subcategory_id', label: 'Subcategory ID (UUID)', type: 'text', required: true },
+      { key: 'game_id', label: 'Game ID (UUID)', type: 'text', required: true },
+      { key: 'sort_order', label: 'Sort Order', type: 'number', defaultValue: 1 },
+      { key: 'is_active', label: 'Is Active', type: 'boolean', defaultValue: true },
+    ],
+  },
 };
 
 export const ViewTablesPage: React.FC = () => {
@@ -216,6 +235,8 @@ export const ViewTablesPage: React.FC = () => {
     { name: 'game_versions', label: 'Game Versions' },
     { name: 'homescreen_explorer', label: 'Homescreen Explorer' },
     { name: 'homescreen_explorer_subcategories', label: 'Explorer Subcategories' },
+    { name: 'subcategory_games', label: 'Subcategory Games' },
+    { name: 'game_releases', label: 'Game Content Releases' },
   ];
 
   // Records state
@@ -278,6 +299,8 @@ export const ViewTablesPage: React.FC = () => {
         homescreen_explorer_subcategories: [
           { id: 'sub-1', explorer_id: 'exp-1', name: 'Phonics & Letters', background_color: '#FFECEE', sort_order: 1, is_active: true, created_at: new Date().toISOString() },
         ],
+        subcategory_games: [],
+        game_releases: [],
       };
 
       setRecords(mockData[tableName] || []);
