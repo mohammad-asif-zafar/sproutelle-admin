@@ -35,16 +35,18 @@ export interface GameCategory {
 export interface Game {
   id: string;
   category_id?: string | null;
+  subcategory_id?: string | null;
   name: string;
   slug: string;
   description?: string | null;
-  game_type: 'multiple_choice' | 'matching' | 'image_selection' | 'audio_recognition' | string;
+  game_type: 'multiple_choice' | 'matching' | 'image_selection' | 'audio_recognition' | 'true_false' | string;
   is_published: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
-  // Joined category
+  // Joined relations
   category?: GameCategory | null;
+  subcategory?: HomescreenExplorerSubcategory | null;
 }
 
 export interface GameLevel {

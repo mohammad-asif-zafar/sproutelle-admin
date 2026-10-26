@@ -52,6 +52,7 @@ const TABLE_SCHEMAS: Record<TableName, TableSchema> = {
       { key: 'name', label: 'Game Name', type: 'text', required: true, placeholder: 'e.g. Alphabet Safari' },
       { key: 'slug', label: 'URL Slug', type: 'text', required: true, placeholder: 'e.g. alphabet-safari' },
       { key: 'category_id', label: 'Category ID (UUID)', type: 'text', placeholder: 'Category UUID' },
+      { key: 'subcategory_id', label: 'Subcategory ID (UUID)', type: 'text', placeholder: 'Optional Subcategory UUID' },
       { key: 'description', label: 'Description', type: 'textarea' },
       {
         key: 'game_type',
@@ -60,9 +61,10 @@ const TABLE_SCHEMAS: Record<TableName, TableSchema> = {
         defaultValue: 'multiple_choice',
         options: [
           { label: 'Multiple Choice', value: 'multiple_choice' },
-          { label: 'Matching', value: 'matching' },
           { label: 'Image Selection', value: 'image_selection' },
           { label: 'Audio Recognition', value: 'audio_recognition' },
+          { label: 'Matching Pairs', value: 'matching' },
+          { label: 'True / False', value: 'true_false' },
         ],
       },
       { key: 'is_published', label: 'Published Status', type: 'boolean', defaultValue: false },

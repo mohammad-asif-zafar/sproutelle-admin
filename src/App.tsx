@@ -8,6 +8,8 @@ import { UploadFilesPage } from './pages/UploadFilesPage';
 import { AddQuestionPage } from './pages/AddQuestionPage';
 import { ViewTablesPage } from './pages/ViewTablesPage';
 import { ExplorerStudioPage } from './pages/ExplorerStudioPage';
+import { GamesStudioPage } from './pages/GamesStudioPage';
+import { GameQuestionsPage } from './pages/GameQuestionsPage';
 import { DocsPage } from './pages/DocsPage';
 
 export function App() {
@@ -27,6 +29,8 @@ export function App() {
           >
             <Route index element={<DashboardPage />} />
             <Route path="explorer" element={<ExplorerStudioPage />} />
+            <Route path="games" element={<GamesStudioPage />} />
+            <Route path="games/:gameId/questions" element={<GameQuestionsPage />} />
             <Route path="upload" element={<UploadFilesPage />} />
             <Route path="questions/new" element={<AddQuestionPage />} />
             <Route path="tables" element={<ViewTablesPage />} />
