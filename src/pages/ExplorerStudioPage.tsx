@@ -12,6 +12,7 @@ import {
   FolderTree,
   ArrowLeft,
   Gamepad2,
+  HelpCircle,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { HomescreenExplorer, HomescreenExplorerSubcategory, MediaAsset, GameCategory, Game, SubcategoryGameAssignment } from '../types/database';
@@ -998,6 +999,18 @@ export const ExplorerStudioPage: React.FC = () => {
                               title="Add Questions"
                             >
                               <Plus size={14} /> Add Questions
+                            </button>
+                            <button
+                              onClick={() => navigate(`/games/${game.id}/questions`, {
+                                state: {
+                                  fromSubcategory: managingSubcategory.id,
+                                  explorerId: managingExplorer.id,
+                                },
+                              })}
+                              className="btn btn-secondary btn-sm"
+                              title="View Questions"
+                            >
+                              <HelpCircle size={14} /> View Questions
                             </button>
                             <button
                               onClick={() => {

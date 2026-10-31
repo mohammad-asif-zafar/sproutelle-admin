@@ -700,9 +700,9 @@ export const GamesStudioPage: React.FC = () => {
                           <button
                             onClick={() => navigate(`/games/${game.id}/questions`)}
                             className="btn btn-secondary btn-sm"
-                            title="Manage Questions"
+                            title="View Questions"
                           >
-                            <HelpCircle size={14} /> Questions
+                            <HelpCircle size={14} /> View Questions
                           </button>
                           <button
                             onClick={() => openPreviewAndPublicationValidator(game)}
