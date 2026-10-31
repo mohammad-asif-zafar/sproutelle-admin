@@ -566,7 +566,7 @@ export const GameQuestionsPage: React.FC = () => {
             className="btn btn-secondary btn-sm"
             style={{ marginBottom: '0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
           >
-            <ArrowLeft size={16} /> {state?.fromSubcategory ? 'Back to Subcategory' : 'Back to Games'}
+            <ArrowLeft size={16} /> {state?.fromSubcategory ? 'Back to Subcategory Games' : 'Back to Games'}
           </button>
 
           {/* Interactive Clickable Hierarchy Breadcrumb */}
@@ -608,7 +608,7 @@ export const GameQuestionsPage: React.FC = () => {
 
           <h2 style={{ color: 'var(--color-primary-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <HelpCircle color="var(--color-primary)" size={28} />
-            Manage Questions: {game?.name || 'Loading game...'}
+            Questions for: &ldquo;{game?.name || 'Loading game...'}&rdquo;
           </h2>
           <p className="page-subtitle">
             Create and configure learning questions, template rules, correct answer keys, and option media assets.

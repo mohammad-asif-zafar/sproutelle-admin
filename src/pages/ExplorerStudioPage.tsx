@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Sparkles,
   Plus,
@@ -86,6 +87,12 @@ const PRESET_CARD_BACKGROUNDS = [
 ];
 
 export const ExplorerStudioPage: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationState = location.state as { managingExplorerId?: string; managingSubcategoryId?: string } | null;
+  const managingExplorerId = locationState?.managingExplorerId;
+  const managingSubcategoryId = locationState?.managingSubcategoryId;
+
   const [explorerList, setExplorerList] = useState<HomescreenExplorer[]>(
     !isSupabaseConfigured ? DEMO_EXPLORER_ITEMS : []
   );
@@ -142,6 +149,152 @@ export const ExplorerStudioPage: React.FC = () => {
   // Assigned Games for Subcategory Editor
   const [assignedGames, setAssignedGames] = useState<Array<{ game_id: string; enabled_patterns: string[]; sort_order: number; is_active: boolean }>>([]);
 
+  // Subcategory Games Management State
+  const [managingSubcategory, setManagingSubcategory] = useState<HomescreenExplorerSubcategory | null>(null);
+  const [subcategoryGames, setSubcategoryGames] = useState<Game[]>([]);
+  const [subcategoryGamesLoading, setSubcategoryGamesLoading] = useState<boolean>(false);
+  const [gameQuestionCountMap, setGameQuestionCountMap] = useState<Map<string, number>>(new Map());
+
+  // Add Existing Games Modal State
+  const [assignGamesModalOpen, setAssignGamesModalOpen] = useState<boolean>(false);
+  const [selectedGameIdsToAssign, setSelectedGameIdsToAssign] = useState<string[]>([]);
+
+  // Create New Game Modal State
+  const [createGameModalOpen, setCreateGameModalOpen] = useState<boolean>(false);
+  const [newGameName, setNewGameName] = useState<string>('');
+  const [newGameSlug, setNewGameSlug] = useState<string>('');
+  const [newGameType, setNewGameType] = useState<string>('multiple_choice');
+  const [newGameCategoryId, setNewGameCategoryId] = useState<string>('');
+  const [newGameIsPublished, setNewGameIsPublished] = useState<boolean>(false);
+  const [newGameSubmitting, setNewGameSubmitting] = useState<boolean>(false);
+  const [newGameError, setNewGameError] = useState<string | null>(null);
+
+  const loadSubcategoryGames = useCallback(async (subId: string) => {
+    if (!isSupabaseConfigured) {
+      setSubcategoryGames(allGames.slice(0, 2));
+      setSubcategoryGamesLoading(false);
+      return;
+    }
+    try {
+      setSubcategoryGamesLoading(true);
+      const [assignRes, qRes] = await Promise.all([
+        supabase
+          .from('subcategory_games')
+          .select('game:games(*, category:game_categories(*))')
+          .eq('subcategory_id', subId)
+          .order('sort_order', { ascending: true }),
+        supabase.from('questions').select('game_id'),
+      ]);
+
+      if (assignRes.error) throw assignRes.error;
+      const gamesList = (assignRes.data || []).map((item: unknown) => (item as { game: Game }).game).filter(Boolean);
+      setSubcategoryGames(gamesList);
+
+      if (qRes.data) {
+        const qMap = new Map<string, number>();
+        ((qRes.data as Array<Record<string, unknown>>) || []).forEach((q) => {
+          const gId = q.game_id as string;
+          if (gId) {
+            qMap.set(gId, (qMap.get(gId) || 0) + 1);
+          }
+        });
+        setGameQuestionCountMap(qMap);
+      }
+    } catch (err) {
+      console.error('Failed loading subcategory games:', err);
+    } finally {
+      setSubcategoryGamesLoading(false);
+    }
+  }, [allGames]);
+
+  const handleOpenSubcategoryGames = (sub: HomescreenExplorerSubcategory) => {
+    setManagingSubcategory(sub);
+    loadSubcategoryGames(sub.id);
+  };
+
+  const handleAssignExistingGames = async () => {
+    if (selectedGameIdsToAssign.length === 0 || !managingSubcategory || !managingExplorer) return;
+    if (!isSupabaseConfigured) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
+    try {
+      const rows = selectedGameIdsToAssign.map((gId, idx) => ({
+        subcategory_id: managingSubcategory.id,
+        game_id: gId,
+        sort_order: subcategoryGames.length + idx + 1,
+        is_active: true,
+      }));
+
+      const { error } = await supabase.from('subcategory_games').upsert(rows, { onConflict: 'subcategory_id,game_id' });
+      if (error) throw error;
+
+      await loadSubcategoryGames(managingSubcategory.id);
+      await loadSubcategories(managingExplorer.id);
+      setAssignGamesModalOpen(false);
+      setSelectedGameIdsToAssign([]);
+    } catch (err) {
+      console.error('Failed assigning existing games:', err);
+      alert('Failed assigning games.');
+    }
+  };
+
+  const handleCreateNewGameInSubcategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNewGameError(null);
+    if (!newGameName.trim()) {
+      setNewGameError('Game name is required.');
+      return;
+    }
+    if (!managingSubcategory || !managingExplorer) return;
+
+    if (!isSupabaseConfigured) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
+    try {
+      setNewGameSubmitting(true);
+      const slug = newGameSlug.trim() || newGameName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      const payload = {
+        name: newGameName.trim(),
+        slug,
+        game_type: newGameType,
+        category_id: newGameCategoryId || null,
+        is_published: newGameIsPublished,
+        sort_order: subcategoryGames.length + 1,
+        config: { question_count: 5 },
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: insertedGame, error: gameErr } = await supabase.from('games').insert(payload).select().single();
+      if (gameErr) throw gameErr;
+
+      if (insertedGame) {
+        const { error: assignErr } = await supabase.from('subcategory_games').insert({
+          subcategory_id: managingSubcategory.id,
+          game_id: insertedGame.id,
+          sort_order: subcategoryGames.length + 1,
+          is_active: true,
+        });
+        if (assignErr) throw assignErr;
+      }
+
+      await loadSubcategoryGames(managingSubcategory.id);
+      await loadSubcategories(managingExplorer.id);
+      setCreateGameModalOpen(false);
+      setNewGameName('');
+      setNewGameSlug('');
+    } catch (err) {
+      console.error('Failed creating game for subcategory:', err);
+      const msg = err instanceof Error ? err.message : 'Database save failed.';
+      setNewGameError(msg);
+    } finally {
+      setNewGameSubmitting(false);
+    }
+  };
+
   // Counts & Error States
   const [explorerSubCountMap, setExplorerSubCountMap] = useState<Map<string, number>>(new Map());
   const [explorerSubCountError, setExplorerSubCountError] = useState<string | null>(null);
@@ -162,7 +315,7 @@ export const ExplorerStudioPage: React.FC = () => {
     try {
       setPageError(null);
 
-      const [expRes, catRes, mediaRes, gamesRes, subCountRes] = await Promise.all([
+      const [expRes, catRes, mediaRes, gamesRes, subCountRes, qRes] = await Promise.all([
         supabase
           .from('homescreen_explorer')
           .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
@@ -171,13 +324,36 @@ export const ExplorerStudioPage: React.FC = () => {
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
         supabase.from('games').select('*').order('sort_order'),
         supabase.from('homescreen_explorer_subcategories').select('id, explorer_id'),
+        supabase.from('questions').select('game_id'),
       ]);
 
       if (expRes.error) {
         console.warn('Homescreen explorer query warning:', expRes.error.message);
         setPageError(`Supabase table warning: ${expRes.error.message}. Table may not exist on live database yet.`);
       } else if (expRes.data) {
-        setExplorerList(expRes.data as HomescreenExplorer[]);
+        const list = expRes.data as HomescreenExplorer[];
+        setExplorerList(list);
+        if (managingExplorerId && !managingExplorer) {
+          const exp = list.find((e) => e.id === managingExplorerId);
+          if (exp) {
+            setManagingExplorer(exp);
+            const { data: subData } = await supabase
+              .from('homescreen_explorer_subcategories')
+              .select('*, image_asset:media_assets(*), category:game_categories(*)')
+              .eq('explorer_id', exp.id)
+              .order('sort_order', { ascending: true });
+            if (subData) {
+              const subList = subData as HomescreenExplorerSubcategory[];
+              setSubcategories(subList);
+              if (managingSubcategoryId && !managingSubcategory) {
+                const sub = subList.find((s) => s.id === managingSubcategoryId);
+                if (sub) {
+                  setManagingSubcategory(sub);
+                }
+              }
+            }
+          }
+        }
       }
 
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
@@ -198,6 +374,17 @@ export const ExplorerStudioPage: React.FC = () => {
         });
         setExplorerSubCountMap(countMap);
       }
+
+      if (qRes.data) {
+        const qMap = new Map<string, number>();
+        ((qRes.data as Array<Record<string, unknown>>) || []).forEach((q) => {
+          const gId = q.game_id as string;
+          if (gId) {
+            qMap.set(gId, (qMap.get(gId) || 0) + 1);
+          }
+        });
+        setGameQuestionCountMap(qMap);
+      }
     } catch (err) {
       console.error('Failed loading explorer items:', err);
       const msg = err instanceof Error ? err.message : 'Database query failed.';
@@ -216,7 +403,7 @@ export const ExplorerStudioPage: React.FC = () => {
 
     async function initData() {
       try {
-        const [expRes, catRes, mediaRes, gamesRes, subCountRes] = await Promise.all([
+        const [expRes, catRes, mediaRes, gamesRes, subCountRes, qRes] = await Promise.all([
           supabase
             .from('homescreen_explorer')
             .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
@@ -225,6 +412,7 @@ export const ExplorerStudioPage: React.FC = () => {
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
           supabase.from('games').select('*').order('sort_order'),
           supabase.from('homescreen_explorer_subcategories').select('id, explorer_id'),
+          supabase.from('questions').select('game_id'),
         ]);
 
         if (!isMounted) return;
@@ -233,7 +421,29 @@ export const ExplorerStudioPage: React.FC = () => {
           console.warn('Homescreen explorer query warning:', expRes.error.message);
           setPageError(`Supabase table warning: ${expRes.error.message}. Table may not exist on live database yet.`);
         } else if (expRes.data) {
-          setExplorerList(expRes.data as HomescreenExplorer[]);
+          const list = expRes.data as HomescreenExplorer[];
+          setExplorerList(list);
+          if (managingExplorerId && !managingExplorer) {
+            const exp = list.find((e) => e.id === managingExplorerId);
+            if (exp) {
+              setManagingExplorer(exp);
+              const { data: subData } = await supabase
+                .from('homescreen_explorer_subcategories')
+                .select('*, image_asset:media_assets(*), category:game_categories(*)')
+                .eq('explorer_id', exp.id)
+                .order('sort_order', { ascending: true });
+              if (subData) {
+                const subList = subData as HomescreenExplorerSubcategory[];
+                setSubcategories(subList);
+                if (managingSubcategoryId && !managingSubcategory) {
+                  const sub = subList.find((s) => s.id === managingSubcategoryId);
+                  if (sub) {
+                    setManagingSubcategory(sub);
+                  }
+                }
+              }
+            }
+          }
         }
 
         if (catRes.data) setCategories(catRes.data as GameCategory[]);
@@ -253,6 +463,17 @@ export const ExplorerStudioPage: React.FC = () => {
             }
           });
           setExplorerSubCountMap(countMap);
+        }
+
+        if (qRes.data) {
+          const qMap = new Map<string, number>();
+          ((qRes.data as Array<Record<string, unknown>>) || []).forEach((q) => {
+            const gId = q.game_id as string;
+            if (gId) {
+              qMap.set(gId, (qMap.get(gId) || 0) + 1);
+            }
+          });
+          setGameQuestionCountMap(qMap);
         }
       } catch (err) {
         console.error('Failed loading explorer items:', err);
@@ -540,7 +761,7 @@ export const ExplorerStudioPage: React.FC = () => {
         );
       } else {
         const newSub: HomescreenExplorerSubcategory = {
-          id: `sub-${Date.now()}`,
+          id: `sub-${crypto.randomUUID()}`,
           created_at: new Date().toISOString(),
           ...payload,
           image_asset: subSelectedMediaAsset,
@@ -613,6 +834,353 @@ export const ExplorerStudioPage: React.FC = () => {
   const filtered = explorerList.filter((i) =>
     i.title_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // If managing games for a specific subcategory
+  if (managingSubcategory && managingExplorer) {
+    return (
+      <div>
+        {/* Subcategory Games Header */}
+        <div className="page-header">
+          <div className="page-title">
+            <button
+              onClick={() => setManagingSubcategory(null)}
+              className="btn btn-secondary btn-sm"
+              style={{ marginBottom: '0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
+            >
+              <ArrowLeft size={16} /> Back to Subcategories
+            </button>
+            <h2 style={{ color: 'var(--color-primary-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Gamepad2 color="var(--color-primary)" size={28} />
+              Games for: &ldquo;{managingSubcategory.name}&rdquo;
+            </h2>
+            <p className="page-subtitle">
+              Manage learning games assigned to this subcategory within &ldquo;{managingExplorer.title_name.replace('\n', ' ')}&rdquo;.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button onClick={() => setAssignGamesModalOpen(true)} className="btn btn-secondary btn-sm">
+              <Plus size={16} /> Add Existing Games
+            </button>
+            <button onClick={() => setCreateGameModalOpen(true)} className="btn btn-primary btn-sm">
+              <Plus size={16} /> Create New Game
+            </button>
+          </div>
+        </div>
+
+        {/* Games Preview Bar */}
+        <div className="card" style={{ marginBottom: '2rem', padding: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Eye size={18} color="var(--color-primary)" />
+              <h3 style={{ fontSize: '1rem', margin: 0, color: 'var(--color-primary-dark)' }}>
+                Games Preview Bar
+              </h3>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+              Assigned Activity Carousel
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              gap: '1rem',
+              overflowX: 'auto',
+              padding: '0.5rem 0.25rem 1rem 0.25rem',
+              alignItems: 'stretch',
+            }}
+          >
+            {subcategoryGames.length === 0 ? (
+              <div style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', padding: '1rem' }}>
+                No games assigned to this subcategory yet.
+              </div>
+            ) : (
+              subcategoryGames.map((game) => {
+                const engineDef = GAME_ENGINE_REGISTRY[game.game_type as EngineType] || GAME_ENGINE_REGISTRY.guess_game;
+                return (
+                  <div
+                    key={game.id}
+                    style={{
+                      width: '140px',
+                      minWidth: '140px',
+                      height: '130px',
+                      backgroundColor: managingSubcategory.background_color || '#FFF0F3',
+                      borderRadius: '16px',
+                      padding: '0.75rem 0.5rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      boxShadow: '0 4px 10px rgba(0,0,0,0.04)',
+                      border: '1px solid rgba(0,0,0,0.05)',
+                    }}
+                  >
+                    <div style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white', borderRadius: '12px' }}>
+                      <Gamepad2 size={24} color="var(--color-primary)" />
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        color: '#0F2D4A',
+                        textAlign: 'center',
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      {game.name}
+                    </div>
+                    <span className="badge badge-primary" style={{ fontSize: '0.625rem' }}>{engineDef.name}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Games Table */}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          {subcategoryGamesLoading ? (
+            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+              Loading assigned games...
+            </div>
+          ) : subcategoryGames.length === 0 ? (
+            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+              No games assigned to this subcategory. Click &ldquo;Add Existing Games&rdquo; or &ldquo;Create New Game&rdquo; above.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ backgroundColor: 'var(--color-surface-muted)', borderBottom: '1px solid var(--color-border)' }}>
+                    <th style={{ padding: '0.875rem 1rem' }}>Order</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Game Name</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Game Type</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Engine</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Questions Count</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Status</th>
+                    <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subcategoryGames.map((game, index) => {
+                    const engineDef = GAME_ENGINE_REGISTRY[game.game_type as EngineType] || GAME_ENGINE_REGISTRY.guess_game;
+                    const qCount = gameQuestionCountMap.get(game.id) ?? 0;
+                    return (
+                      <tr key={game.id} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+                        <td style={{ padding: '0.875rem 1rem', fontWeight: 700 }}>#{index + 1}</td>
+                        <td style={{ padding: '0.875rem 1rem' }}>
+                          <div style={{ fontWeight: 700, color: '#0F2D4A' }}>{game.name}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>/{game.slug}</div>
+                        </td>
+                        <td style={{ padding: '0.875rem 1rem' }}>{game.game_type}</td>
+                        <td style={{ padding: '0.875rem 1rem' }}>
+                          <span className="badge badge-primary">{engineDef.name}</span>
+                        </td>
+                        <td style={{ padding: '0.875rem 1rem' }}>
+                          <span className="badge badge-secondary" style={{ fontWeight: 700 }}>{qCount}</span>
+                        </td>
+                        <td style={{ padding: '0.875rem 1rem' }}>
+                          <span className={`badge ${game.is_published ? 'badge-success' : 'badge-warning'}`}>
+                            {game.is_published ? 'Published' : 'Draft'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
+                          <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
+                            <button
+                              onClick={() => navigate(`/games/${game.id}/questions`, {
+                                state: {
+                                  fromSubcategory: managingSubcategory.id,
+                                  explorerId: managingExplorer.id,
+                                  openAddModal: true,
+                                },
+                              })}
+                              className="btn btn-primary btn-sm"
+                              title="Add Questions"
+                            >
+                              <Plus size={14} /> Add Questions
+                            </button>
+                            <button
+                              onClick={() => {
+                                navigate('/games');
+                              }}
+                              className="btn btn-secondary btn-sm"
+                              title="Edit Game"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (confirm(`Remove game "${game.name}" from subcategory "${managingSubcategory.name}"?`)) {
+                                  await supabase.from('subcategory_games').delete().eq('subcategory_id', managingSubcategory.id).eq('game_id', game.id);
+                                  await loadSubcategoryGames(managingSubcategory.id);
+                                  await loadSubcategories(managingExplorer.id);
+                                }
+                              }}
+                              className="btn btn-danger btn-sm"
+                              title="Remove Game Assignment"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Add Existing Games Modal */}
+        {assignGamesModalOpen && (
+          <Modal
+            isOpen={assignGamesModalOpen}
+            onClose={() => setAssignGamesModalOpen(false)}
+            title={`Add Existing Games to "${managingSubcategory.name}"`}
+            maxWidth="600px"
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', margin: 0 }}>
+                Select available games to assign to this subcategory:
+              </p>
+              <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+                {allGames.filter((g) => !subcategoryGames.some((sg) => sg.id === g.id)).length === 0 ? (
+                  <div style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', textAlign: 'center', padding: '1rem' }}>
+                    All available games are already assigned to this subcategory.
+                  </div>
+                ) : (
+                  allGames
+                    .filter((g) => !subcategoryGames.some((sg) => sg.id === g.id))
+                    .map((game) => (
+                      <label key={game.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0', borderBottom: '1px solid var(--color-border-subtle)', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedGameIdsToAssign.includes(game.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedGameIdsToAssign((prev) => [...prev, game.id]);
+                            } else {
+                              setSelectedGameIdsToAssign((prev) => prev.filter((id) => id !== game.id));
+                            }
+                          }}
+                        />
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '0.875rem' }}>{game.name}</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{game.game_type} | /{game.slug}</div>
+                        </div>
+                      </label>
+                    ))
+                )}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button onClick={() => setAssignGamesModalOpen(false)} className="btn btn-secondary">
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAssignExistingGames}
+                  className="btn btn-primary"
+                  disabled={selectedGameIdsToAssign.length === 0}
+                >
+                  Assign Selected Games
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
+
+        {/* Create New Game Modal */}
+        {createGameModalOpen && (
+          <Modal
+            isOpen={createGameModalOpen}
+            onClose={() => setCreateGameModalOpen(false)}
+            title={`Create New Game for "${managingSubcategory.name}"`}
+            maxWidth="600px"
+          >
+            {newGameError && (
+              <div style={{ backgroundColor: 'var(--color-danger-soft)', color: 'var(--color-danger)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+                {newGameError}
+              </div>
+            )}
+            <form onSubmit={handleCreateNewGameInSubcategory}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div className="input-group">
+                  <label className="input-label">Game Name <span style={{ color: 'var(--color-danger)' }}>*</span></label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="e.g. Letter Tracing Safari"
+                    value={newGameName}
+                    onChange={(e) => setNewGameName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Game Slug (URL path)</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="e.g. letter-tracing-safari"
+                    value={newGameSlug}
+                    onChange={(e) => setNewGameSlug(e.target.value)}
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Engine / Game Type</label>
+                  <select
+                    className="form-select"
+                    value={newGameType}
+                    onChange={(e) => setNewGameType(e.target.value)}
+                  >
+                    {Object.entries(GAME_ENGINE_REGISTRY).map(([key, def]) => (
+                      <option key={key} value={key}>{def.name} ({key})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Topic Category</label>
+                  <select
+                    className="form-select"
+                    value={newGameCategoryId}
+                    onChange={(e) => setNewGameCategoryId(e.target.value)}
+                  >
+                    <option value="">Select category...</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Publication Status</label>
+                  <select
+                    className="form-select"
+                    value={String(newGameIsPublished)}
+                    onChange={(e) => setNewGameIsPublished(e.target.value === 'true')}
+                  >
+                    <option value="false">Draft (Unpublished)</option>
+                    <option value="true">Published (Live in App)</option>
+                  </select>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setCreateGameModalOpen(false)}
+                    className="btn btn-secondary"
+                    disabled={newGameSubmitting}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={newGameSubmitting}>
+                    {newGameSubmitting ? 'Creating...' : 'Create & Assign Game'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </Modal>
+        )}
+      </div>
+    );
+  }
 
   // If managing subcategories for a specific explorer card
   if (managingExplorer) {
@@ -785,6 +1353,13 @@ export const ExplorerStudioPage: React.FC = () => {
                       </td>
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
+                          <button
+                            onClick={() => handleOpenSubcategoryGames(sub)}
+                            className="btn btn-primary btn-sm"
+                            title="Manage Games"
+                          >
+                            <Gamepad2 size={14} /> Games ({subGameCountMap.get(sub.id) ?? 0})
+                          </button>
                           <button onClick={() => openEditSubModal(sub)} className="btn btn-secondary btn-sm" title="Add Games & Manage Subcategory">
                             <Gamepad2 size={14} /> Add Games
                           </button>
