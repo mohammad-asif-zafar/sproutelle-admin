@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   HelpCircle,
@@ -27,7 +27,7 @@ export const GameQuestionsPage: React.FC = () => {
   const { gameId } = useParams<{ gameId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const state = location.state as { fromSubcategory?: string; explorerId?: string } | null;
+  const state = location.state as { fromSubcategory?: string; explorerId?: string; openAddModal?: boolean } | null;
 
   const [game, setGame] = useState<Game | null>(null);
   const [subcategoryInfo, setSubcategoryInfo] = useState<HomescreenExplorerSubcategory | null>(null);
@@ -68,6 +68,8 @@ export const GameQuestionsPage: React.FC = () => {
 
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const openedModalGameIdRef = useRef<string | null>(null);
 
   const handleBackNavigation = () => {
     if (state?.fromSubcategory && state?.explorerId) {
@@ -177,25 +179,32 @@ export const GameQuestionsPage: React.FC = () => {
           if (isMounted) setGameError(`Hierarchy Error: ${msg}`);
         }
 
-        if (qRes.data && isMounted) {
-          const loadedQuestions = qRes.data as Question[];
-          setQuestions(loadedQuestions);
-          if ((location.state as { openAddModal?: boolean })?.openAddModal) {
-            setEditingQuestion(null);
-            setQuestionText('');
-            setInstructions('');
-            setSortOrder(loadedQuestions.length + 1);
-            setIsDraft(true);
-            setImageAsset(null);
-            setAudioAsset(null);
-            setOptions([
-              { id: '1', option_text: 'Option A', is_correct: true },
-              { id: '2', option_text: 'Option B', is_correct: false },
-            ]);
-            setFormError(null);
-            setModalOpen(true);
-            window.history.replaceState({}, document.title);
-          }
+        const loadedQuestions = (qRes.data as Question[]) || [];
+        setQuestions(loadedQuestions);
+
+        if (state?.openAddModal && openedModalGameIdRef.current !== gameData.id) {
+          openedModalGameIdRef.current = gameData.id;
+          setEditingQuestion(null);
+          setQuestionText('');
+          setInstructions('');
+          setSortOrder(loadedQuestions.length + 1);
+          setIsDraft(true);
+          setImageAsset(null);
+          setAudioAsset(null);
+          setOptions([
+            { id: '1', option_text: 'Option A', is_correct: true },
+            { id: '2', option_text: 'Option B', is_correct: false },
+          ]);
+          setFormError(null);
+          setModalOpen(true);
+
+          navigate(location.pathname, {
+            replace: true,
+            state: {
+              fromSubcategory: state?.fromSubcategory,
+              explorerId: state?.explorerId,
+            },
+          });
         }
       } catch (err) {
         console.error('Failed loading game questions:', err);
@@ -211,7 +220,7 @@ export const GameQuestionsPage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [gameId, state?.fromSubcategory, state?.explorerId, location.state]);
+  }, [gameId, state?.fromSubcategory, state?.explorerId]);
 
   const openCreateModal = () => {
     if (!gameId || !game) {
