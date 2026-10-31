@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   HelpCircle,
   ArrowLeft,
@@ -7,9 +7,10 @@ import {
   Trash2,
   Edit2,
   Image as ImageIcon,
+  Copy,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { Game, Question, MediaAsset } from '../types/database';
+import type { Game, Question, MediaAsset, HomescreenExplorer, HomescreenExplorerSubcategory } from '../types/database';
 import { Modal } from '../components/Common/Modal';
 import { MediaSelectorModal } from '../components/Media/MediaSelectorModal';
 import { MediaPreviewTile } from '../components/Media/MediaPreviewTile';
@@ -25,42 +26,21 @@ interface FormOption {
 export const GameQuestionsPage: React.FC = () => {
   const { gameId } = useParams<{ gameId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const state = location.state as { fromSubcategory?: string; explorerId?: string } | null;
 
-  const [game, setGame] = useState<Game | null>(
-    !isSupabaseConfigured
-      ? {
-          id: gameId || 'game-1',
-          name: 'Alphabet Safari',
-          slug: 'alphabet-safari',
-          game_type: 'multiple_choice',
-          is_published: true,
-          sort_order: 1,
-          created_at: '',
-          updated_at: '',
-        }
+  const [game, setGame] = useState<Game | null>(null);
+  const [subcategoryInfo, setSubcategoryInfo] = useState<HomescreenExplorerSubcategory | null>(null);
+  const [explorerInfo, setExplorerInfo] = useState<HomescreenExplorer | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [loading, setLoading] = useState<boolean>(Boolean(gameId && isSupabaseConfigured));
+  const [gameError, setGameError] = useState<string | null>(
+    !gameId
+      ? 'Missing game ID parameter in route.'
+      : !isSupabaseConfigured
+      ? 'Supabase is not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env file to load questions.'
       : null
   );
-  const [questions, setQuestions] = useState<Question[]>(
-    !isSupabaseConfigured
-      ? [
-          {
-            id: 'q-1',
-            game_id: gameId || 'game-1',
-            question_text: 'What sound does the letter A make?',
-            question_type: 'multiple_choice',
-            is_draft: false,
-            sort_order: 1,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            options: [
-              { id: 'o-1', question_id: 'q-1', option_text: 'Ah as in Apple', is_correct: true, sort_order: 1, created_at: '' },
-              { id: 'o-2', question_id: 'q-1', option_text: 'Buh as in Ball', is_correct: false, sort_order: 2, created_at: '' },
-            ],
-          },
-        ]
-      : []
-  );
-  const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
 
   // Modals & Form State
   const [modalOpen, setModalOpen] = useState<boolean>(false);
@@ -89,41 +69,29 @@ export const GameQuestionsPage: React.FC = () => {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const loadGameAndQuestions = useCallback(async () => {
-    if (!gameId || !isSupabaseConfigured) return;
-
-    try {
-      const [gameRes, qRes] = await Promise.all([
-        supabase.from('games').select('*').eq('id', gameId).single(),
-        supabase
-          .from('questions')
-          .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
-          .eq('game_id', gameId)
-          .order('sort_order', { ascending: true }),
-      ]);
-
-      if (gameRes.data) {
-        setGame(gameRes.data as Game);
-        setQuestionType(gameRes.data.game_type || 'multiple_choice');
-      }
-
-      if (qRes.data) {
-        setQuestions(qRes.data as Question[]);
-      }
-    } catch (err) {
-      console.error('Failed loading game questions:', err);
+  const handleBackNavigation = () => {
+    if (state?.fromSubcategory && state?.explorerId) {
+      navigate('/explorer', {
+        state: {
+          managingExplorerId: state.explorerId,
+          managingSubcategoryId: state.fromSubcategory,
+        },
+      });
+    } else {
+      navigate('/games');
     }
-  }, [gameId]);
+  };
 
   useEffect(() => {
     if (!gameId || !isSupabaseConfigured) return;
 
     let isMounted = true;
 
-    async function init() {
+    async function loadGameAndQuestions() {
       try {
+        setGameError(null);
         const [gameRes, qRes] = await Promise.all([
-          supabase.from('games').select('*').eq('id', gameId).single(),
+          supabase.from('games').select('*').eq('id', gameId).maybeSingle(),
           supabase
             .from('questions')
             .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
@@ -133,49 +101,134 @@ export const GameQuestionsPage: React.FC = () => {
 
         if (!isMounted) return;
 
-        if (gameRes.data) {
-          setGame(gameRes.data as Game);
-          setQuestionType(gameRes.data.game_type || 'multiple_choice');
+        if (gameRes.error || !gameRes.data) {
+          setGameError(`Game with ID "${gameId}" could not be found.`);
+          setGame(null);
+          setLoading(false);
+          return;
         }
 
-        if (qRes.data) {
-          setQuestions(qRes.data as Question[]);
+        if (qRes.error) {
+          setGameError(`Failed to load questions: ${qRes.error.message}`);
+          setQuestions([]);
+          setLoading(false);
+          return;
+        }
+
+        const gameData = gameRes.data as Game;
+        setGame(gameData);
+        setQuestionType(gameData.game_type || 'multiple_choice');
+
+        // Clear stale state before resolution
+        setSubcategoryInfo(null);
+        setExplorerInfo(null);
+
+        // Resolve Explorer & Subcategory hierarchy strictly via canonical subcategory_games junction table
+        try {
+          const { data: assignList, error: assignErr } = await supabase
+            .from('subcategory_games')
+            .select('subcategory:homescreen_explorer_subcategories(*, explorer:homescreen_explorer(*))')
+            .eq('game_id', gameData.id);
+
+          if (assignErr) {
+            console.error('Hierarchy query error:', assignErr.message);
+            if (isMounted) {
+              setGameError(`Relationship Error: Failed to load subcategory assignments (${assignErr.message}).`);
+            }
+          } else if (assignList && assignList.length > 0) {
+            if (state?.fromSubcategory && state?.explorerId) {
+              const exactMatch = assignList.find(
+                (a: unknown) =>
+                  (a as { subcategory?: { id?: string; explorer?: { id?: string } } }).subcategory?.id === state.fromSubcategory &&
+                  (a as { subcategory?: { id?: string; explorer?: { id?: string } } }).subcategory?.explorer?.id === state.explorerId
+              );
+              if (exactMatch) {
+                const subRecord = (exactMatch as unknown as { subcategory?: HomescreenExplorerSubcategory & { explorer?: HomescreenExplorer } }).subcategory;
+                if (subRecord && isMounted) {
+                  setSubcategoryInfo(subRecord);
+                  if (subRecord.explorer) {
+                    setExplorerInfo(subRecord.explorer);
+                  }
+                }
+              } else if (isMounted) {
+                setGameError('Relationship Error: Provided navigation context does not match actual subcategory assignment for this game.');
+              }
+            } else {
+              if (assignList.length === 1) {
+                const subRecord = (assignList[0] as unknown as { subcategory?: HomescreenExplorerSubcategory & { explorer?: HomescreenExplorer } }).subcategory;
+                if (subRecord && isMounted) {
+                  setSubcategoryInfo(subRecord);
+                  if (subRecord.explorer) {
+                    setExplorerInfo(subRecord.explorer);
+                  }
+                }
+              } else {
+                if (isMounted) {
+                  setGameError('Relationship Notice: This game belongs to multiple subcategories. Please navigate to Questions from a specific subcategory view.');
+                }
+              }
+            }
+          } else if (isMounted) {
+            setGameError('Relationship Error: This game is not assigned to any Explorer Subcategory via the canonical junction table (subcategory_games).');
+          }
+        } catch (hierErr) {
+          console.error('Hierarchy resolution exception:', hierErr);
+          const msg = hierErr instanceof Error ? hierErr.message : 'Hierarchy check failed.';
+          if (isMounted) setGameError(`Hierarchy Error: ${msg}`);
+        }
+
+        if (qRes.data && isMounted) {
+          const loadedQuestions = qRes.data as Question[];
+          setQuestions(loadedQuestions);
+          if ((location.state as { openAddModal?: boolean })?.openAddModal) {
+            setEditingQuestion(null);
+            setQuestionText('');
+            setInstructions('');
+            setSortOrder(loadedQuestions.length + 1);
+            setIsDraft(true);
+            setImageAsset(null);
+            setAudioAsset(null);
+            setOptions([
+              { id: '1', option_text: 'Option A', is_correct: true },
+              { id: '2', option_text: 'Option B', is_correct: false },
+            ]);
+            setFormError(null);
+            setModalOpen(true);
+            window.history.replaceState({}, document.title);
+          }
         }
       } catch (err) {
         console.error('Failed loading game questions:', err);
+        const msg = err instanceof Error ? err.message : 'Database query failed.';
+        if (isMounted) setGameError(msg);
       } finally {
         if (isMounted) setLoading(false);
       }
     }
 
-    init();
+    loadGameAndQuestions();
 
     return () => {
       isMounted = false;
     };
-  }, [gameId]);
+  }, [gameId, state?.fromSubcategory, state?.explorerId, location.state]);
 
   const openCreateModal = () => {
+    if (!gameId || !game) {
+      alert('Cannot create questions: selected game is not loaded.');
+      return;
+    }
     setEditingQuestion(null);
     setQuestionText('');
-    setQuestionType(game?.game_type || 'multiple_choice');
     setInstructions('');
     setSortOrder(questions.length + 1);
     setIsDraft(true);
     setImageAsset(null);
     setAudioAsset(null);
-
-    if (game?.game_type === 'true_false') {
-      setOptions([
-        { id: '1', option_text: 'True', is_correct: true },
-        { id: '2', option_text: 'False', is_correct: false },
-      ]);
-    } else {
-      setOptions([
-        { id: '1', option_text: 'Option A', is_correct: true },
-        { id: '2', option_text: 'Option B', is_correct: false },
-      ]);
-    }
+    setOptions([
+      { id: '1', option_text: 'Option A', is_correct: true },
+      { id: '2', option_text: 'Option B', is_correct: false },
+    ]);
     setFormError(null);
     setModalOpen(true);
   };
@@ -208,6 +261,58 @@ export const GameQuestionsPage: React.FC = () => {
     }
     setFormError(null);
     setModalOpen(true);
+  };
+
+  const handleDuplicateQuestion = async (q: Question) => {
+    if (!gameId || !game) return;
+
+    const clonedPayload = {
+      game_id: gameId,
+      question_text: `${q.question_text} (Copy)`,
+      question_type: q.question_type,
+      instructions: q.instructions,
+      sort_order: questions.length + 1,
+      is_draft: true,
+      image_asset_id: q.image_asset_id,
+      audio_asset_id: q.audio_asset_id,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (!isSupabaseConfigured) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
+    try {
+      const { data: insertedQ, error } = await supabase.from('questions').insert(clonedPayload).select().single();
+      if (error) throw error;
+
+      if (insertedQ && q.options && q.options.length > 0) {
+        const optionRows = q.options.map((o, idx) => ({
+          question_id: insertedQ.id,
+          option_text: o.option_text,
+          is_correct: o.is_correct,
+          sort_order: idx + 1,
+          media_asset_id: o.media_asset_id,
+        }));
+        const { error: optErr } = await supabase.from('question_options').insert(optionRows);
+        if (optErr) {
+          await supabase.from('questions').delete().eq('id', insertedQ.id).eq('game_id', gameId);
+          throw optErr;
+        }
+      }
+
+      // Reload questions
+      const { data: qRes } = await supabase
+        .from('questions')
+        .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+        .eq('game_id', gameId)
+        .order('sort_order', { ascending: true });
+      if (qRes) setQuestions(qRes as Question[]);
+    } catch (err) {
+      console.error('Failed duplicating question securely:', err);
+      alert('Failed to duplicate question securely.');
+    }
   };
 
   const handleAddOption = () => {
@@ -255,10 +360,8 @@ export const GameQuestionsPage: React.FC = () => {
     }
 
     if (questionType === 'image_selection') {
-      const missingImg = options.some(
-        (o) => !o.media_asset_id || !o.media_asset || (o.media_asset.mime_type && !o.media_asset.mime_type.startsWith('image/'))
-      );
-      if (missingImg) return 'Image Selection template requires a valid image asset for every answer option.';
+      const missingImg = options.some((o) => !o.media_asset && !o.media_asset_id);
+      if (missingImg) return 'Image Selection template requires an image asset for every answer option.';
     }
 
     return null;
@@ -274,41 +377,13 @@ export const GameQuestionsPage: React.FC = () => {
       return;
     }
 
-    if (!gameId) return;
+    if (!gameId || !game) {
+      setFormError('Missing game ID context.');
+      return;
+    }
 
     if (!isSupabaseConfigured) {
-      const newQ: Question = {
-        id: editingQuestion ? editingQuestion.id : `q-${Date.now()}`,
-        game_id: gameId,
-        question_text: questionText.trim(),
-        question_type: questionType,
-        instructions: instructions.trim() || null,
-        sort_order: sortOrder,
-        is_draft: isDraft,
-        image_asset_id: imageAsset?.id || null,
-        audio_asset_id: audioAsset?.id || null,
-        created_at: editingQuestion?.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        image_asset: imageAsset,
-        audio_asset: audioAsset,
-        options: options.map((o, idx) => ({
-          id: o.id,
-          question_id: editingQuestion ? editingQuestion.id : `q-${Date.now()}`,
-          option_text: o.option_text,
-          is_correct: o.is_correct,
-          sort_order: idx + 1,
-          media_asset_id: o.media_asset?.id || null,
-          media_asset: o.media_asset,
-          created_at: '',
-        })),
-      };
-
-      setQuestions((prev) =>
-        editingQuestion
-          ? prev.map((q) => (q.id === editingQuestion.id ? newQ : q))
-          : [...prev, newQ]
-      );
-      setModalOpen(false);
+      alert('Supabase is not configured.');
       return;
     }
 
@@ -329,7 +404,7 @@ export const GameQuestionsPage: React.FC = () => {
       let qId = editingQuestion?.id;
 
       if (editingQuestion) {
-        const { error } = await supabase.from('questions').update(questionPayload).eq('id', qId);
+        const { error } = await supabase.from('questions').update(questionPayload).eq('id', qId).eq('game_id', gameId);
         if (error) throw error;
         await supabase.from('question_options').delete().eq('question_id', qId);
       } else {
@@ -347,12 +422,108 @@ export const GameQuestionsPage: React.FC = () => {
       }));
 
       const { error: optError } = await supabase.from('question_options').insert(optionRows);
-      if (optError) throw optError;
+      if (optError) {
+        if (!editingQuestion && qId) {
+          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId);
+        }
+        throw optError;
+      }
 
-      await loadGameAndQuestions();
+      // Reload questions
+      const { data: qRes } = await supabase
+        .from('questions')
+        .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+        .eq('game_id', gameId)
+        .order('sort_order', { ascending: true });
+      if (qRes) setQuestions(qRes as Question[]);
+
       setModalOpen(false);
     } catch (err) {
-      console.error('Failed saving question:', err);
+      console.error('Failed saving question securely:', err);
+      const msg = err instanceof Error ? err.message : 'Database save failed.';
+      setFormError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSaveAndAddAnother = async () => {
+    setFormError(null);
+
+    const validationErr = validateTemplateRules();
+    if (validationErr) {
+      setFormError(validationErr);
+      return;
+    }
+
+    if (!gameId || !game) {
+      setFormError('Missing game ID context.');
+      return;
+    }
+
+    if (!isSupabaseConfigured) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      const questionPayload = {
+        game_id: gameId,
+        question_text: questionText.trim(),
+        question_type: questionType,
+        instructions: instructions.trim() || null,
+        sort_order: sortOrder,
+        is_draft: isDraft,
+        image_asset_id: imageAsset?.id || null,
+        audio_asset_id: audioAsset?.id || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: insertedQ, error } = await supabase.from('questions').insert(questionPayload).select().single();
+      if (error) throw error;
+      const qId = insertedQ.id;
+
+      const optionRows = options.map((o, idx) => ({
+        question_id: qId,
+        option_text: o.option_text,
+        is_correct: o.is_correct,
+        sort_order: idx + 1,
+        media_asset_id: o.media_asset?.id || null,
+      }));
+
+      const { error: optError } = await supabase.from('question_options').insert(optionRows);
+      if (optError) {
+        if (qId) {
+          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId);
+        }
+        throw optError;
+      }
+
+      // Reload questions
+      const { data: qRes } = await supabase
+        .from('questions')
+        .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+        .eq('game_id', gameId)
+        .order('sort_order', { ascending: true });
+      if (qRes) {
+        const loaded = qRes as Question[];
+        setQuestions(loaded);
+        // Reset form for next question without closing modal
+        setEditingQuestion(null);
+        setQuestionText('');
+        setInstructions('');
+        setSortOrder(loaded.length + 1);
+        setIsDraft(true);
+        setImageAsset(null);
+        setAudioAsset(null);
+        setOptions([
+          { id: '1', option_text: 'Option A', is_correct: true },
+          { id: '2', option_text: 'Option B', is_correct: false },
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed saving question securely:', err);
       const msg = err instanceof Error ? err.message : 'Database save failed.';
       setFormError(msg);
     } finally {
@@ -361,21 +532,27 @@ export const GameQuestionsPage: React.FC = () => {
   };
 
   const handleDelete = async () => {
-    if (!deleteConfirmQuestion) return;
+    if (!deleteConfirmQuestion || !gameId) return;
     if (!isSupabaseConfigured) {
-      setQuestions((prev) => prev.filter((q) => q.id !== deleteConfirmQuestion.id));
-      setDeleteConfirmQuestion(null);
+      alert('Supabase is not configured.');
       return;
     }
 
     try {
-      const { error } = await supabase.from('questions').delete().eq('id', deleteConfirmQuestion.id);
+      const { error } = await supabase.from('questions').delete().eq('id', deleteConfirmQuestion.id).eq('game_id', gameId);
       if (error) throw error;
-      await loadGameAndQuestions();
+
+      const { data: qRes } = await supabase
+        .from('questions')
+        .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+        .eq('game_id', gameId)
+        .order('sort_order', { ascending: true });
+      if (qRes) setQuestions(qRes as Question[]);
+
       setDeleteConfirmQuestion(null);
     } catch (err) {
-      console.error('Failed deleting question:', err);
-      alert('Failed to delete question.');
+      console.error('Failed deleting question securely:', err);
+      alert('Failed to delete question securely.');
     }
   };
 
@@ -385,12 +562,50 @@ export const GameQuestionsPage: React.FC = () => {
       <div className="page-header">
         <div className="page-title">
           <button
-            onClick={() => navigate('/games')}
+            onClick={handleBackNavigation}
             className="btn btn-secondary btn-sm"
             style={{ marginBottom: '0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
           >
-            <ArrowLeft size={16} /> Back to Games
+            <ArrowLeft size={16} /> {state?.fromSubcategory ? 'Back to Subcategory' : 'Back to Games'}
           </button>
+
+          {/* Interactive Clickable Hierarchy Breadcrumb */}
+          <div style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', marginBottom: '0.375rem', display: 'flex', alignItems: 'center', gap: '0.375rem', flexWrap: 'wrap' }}>
+            <span style={{ cursor: 'pointer', color: 'var(--color-primary)' }} onClick={() => navigate('/explorer')}>Explorer</span>
+            <span>/</span>
+            {explorerInfo ? (
+              <span
+                style={{ cursor: 'pointer', color: 'var(--color-primary)' }}
+                onClick={() => navigate('/explorer', { state: { managingExplorerId: explorerInfo.id } })}
+              >
+                {explorerInfo.title_name?.replace('\n', ' ')}
+              </span>
+            ) : (
+              <span>Explorer Card</span>
+            )}
+            <span>/</span>
+            {subcategoryInfo && explorerInfo ? (
+              <span
+                style={{ cursor: 'pointer', color: 'var(--color-primary)' }}
+                onClick={() => navigate('/explorer', { state: { managingExplorerId: explorerInfo.id, managingSubcategoryId: subcategoryInfo.id } })}
+              >
+                {subcategoryInfo.name}
+              </span>
+            ) : (
+              <span>Subcategory</span>
+            )}
+            <span>/</span>
+            <span
+              style={{ cursor: 'pointer', color: 'var(--color-primary)', fontWeight: 700 }}
+              onClick={() => navigate('/games')}
+              title="Return to Games Catalog"
+            >
+              {game?.name || 'Game'}
+            </span>
+            <span>/</span>
+            <span style={{ fontWeight: 700 }}>Questions ({questions.length})</span>
+          </div>
+
           <h2 style={{ color: 'var(--color-primary-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <HelpCircle color="var(--color-primary)" size={28} />
             Manage Questions: {game?.name || 'Loading game...'}
@@ -399,16 +614,41 @@ export const GameQuestionsPage: React.FC = () => {
             Create and configure learning questions, template rules, correct answer keys, and option media assets.
           </p>
         </div>
-        <button onClick={openCreateModal} className="btn btn-primary btn-sm">
+        <button
+          onClick={openCreateModal}
+          className="btn btn-primary btn-sm"
+          disabled={!game || loading || Boolean(gameError)}
+          title={!game || loading || Boolean(gameError) ? 'Game must be loaded successfully before adding questions' : 'Add Question'}
+        >
           <Plus size={16} /> Add Question
         </button>
       </div>
+
+      {gameError && (
+        <div
+          style={{
+            backgroundColor: 'var(--color-danger-soft)',
+            color: 'var(--color-danger)',
+            padding: '1rem',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '1.5rem',
+            fontWeight: 600,
+            fontSize: '0.875rem',
+          }}
+        >
+          {gameError}
+        </div>
+      )}
 
       {/* Questions List */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
             Loading game questions...
+          </div>
+        ) : gameError ? (
+          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-danger)' }}>
+            <p>Cannot manage questions: {gameError}</p>
           </div>
         ) : questions.length === 0 ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
@@ -457,6 +697,9 @@ export const GameQuestionsPage: React.FC = () => {
                     <span className={`badge ${!q.is_draft ? 'badge-success' : 'badge-warning'}`}>
                       {!q.is_draft ? 'Published' : 'Draft'}
                     </span>
+                    <button onClick={() => handleDuplicateQuestion(q)} className="btn btn-secondary btn-sm" title="Duplicate Question">
+                      <Copy size={14} />
+                    </button>
                     <button onClick={() => openEditModal(q)} className="btn btn-secondary btn-sm" title="Edit Question">
                       <Edit2 size={14} />
                     </button>
@@ -479,6 +722,9 @@ export const GameQuestionsPage: React.FC = () => {
                         fontSize: '0.8125rem',
                         fontWeight: opt.is_correct ? 700 : 500,
                         color: opt.is_correct ? 'var(--color-success)' : 'var(--color-text-body)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.375rem',
                       }}
                     >
                       {opt.option_text || '(Media Option)'} {opt.is_correct && '✓'}
@@ -516,13 +762,14 @@ export const GameQuestionsPage: React.FC = () => {
 
           <form onSubmit={handleSaveQuestion}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              {/* Question Text */}
+              {/* Question Prompt */}
               <div className="input-group">
                 <label className="input-label">
-                  Question Prompt / Text <span style={{ color: 'var(--color-danger)' }}>*</span>
+                  Question Prompt Text <span style={{ color: 'var(--color-danger)' }}>*</span>
                 </label>
-                <textarea
-                  className="form-textarea"
+                <input
+                  type="text"
+                  className="form-control"
                   placeholder="e.g. What sound does the letter A make?"
                   value={questionText}
                   onChange={(e) => setQuestionText(e.target.value)}
@@ -532,7 +779,7 @@ export const GameQuestionsPage: React.FC = () => {
 
               {/* Question Type */}
               <div className="input-group">
-                <label className="input-label">Question Template Mode</label>
+                <label className="input-label">Question Format / Type</label>
                 <select
                   className="form-select"
                   value={questionType}
@@ -583,7 +830,7 @@ export const GameQuestionsPage: React.FC = () => {
               </div>
 
               {/* Answer Options Manager */}
-              <div>
+              <div style={{ backgroundColor: 'var(--color-surface-muted)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
                   <label className="input-label" style={{ margin: 0 }}>
                     Answer Options (Select Correct Answer) <span style={{ color: 'var(--color-danger)' }}>*</span>
@@ -596,17 +843,17 @@ export const GameQuestionsPage: React.FC = () => {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {options.map((opt, idx) => (
+                  {options.map((opt, index) => (
                     <div
                       key={opt.id}
                       style={{
-                        padding: '0.75rem',
-                        borderRadius: 'var(--radius-md)',
-                        backgroundColor: opt.is_correct ? 'var(--color-success-soft)' : 'var(--color-surface-muted)',
-                        border: `1px solid ${opt.is_correct ? 'var(--color-success)' : 'var(--color-border)'}`,
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.75rem',
+                        backgroundColor: opt.is_correct ? 'var(--color-success-soft)' : 'var(--color-surface)',
+                        border: `1px solid ${opt.is_correct ? 'var(--color-success)' : 'var(--color-border)'}`,
+                        borderRadius: 'var(--radius-md)',
+                        padding: '0.625rem 0.75rem',
                       }}
                     >
                       <input
@@ -615,17 +862,13 @@ export const GameQuestionsPage: React.FC = () => {
                         checked={opt.is_correct}
                         onChange={() => handleSetCorrect(opt.id)}
                         title="Mark as correct answer"
-                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                        style={{ cursor: 'pointer', width: '18px', height: '18px' }}
                       />
-
-                      <span style={{ fontSize: '0.8125rem', fontWeight: 700, minWidth: '20px' }}>
-                        {idx + 1}.
-                      </span>
 
                       <input
                         type="text"
-                        className="form-control"
-                        placeholder={`Option ${idx + 1} text...`}
+                        className="form-control form-control-sm"
+                        placeholder={`Option ${index + 1} text...`}
                         value={opt.option_text}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -652,7 +895,6 @@ export const GameQuestionsPage: React.FC = () => {
                                     prev.map((o) => (o.id === opt.id ? { ...o, media_asset: null, media_asset_id: null } : o))
                                   );
                                 }}
-                                className="btn btn-secondary btn-sm"
                               >
                                 Remove
                               </button>
@@ -687,7 +929,7 @@ export const GameQuestionsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Sort Order & Publication Status */}
+              {/* Sort Order & Draft Status */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div className="input-group">
                   <label className="input-label">Sort Order</label>
@@ -700,14 +942,14 @@ export const GameQuestionsPage: React.FC = () => {
                 </div>
 
                 <div className="input-group">
-                  <label className="input-label">Status</label>
+                  <label className="input-label">Publication Status</label>
                   <select
                     className="form-select"
                     value={String(isDraft)}
                     onChange={(e) => setIsDraft(e.target.value === 'true')}
                   >
-                    <option value="true">Draft (Incomplete)</option>
-                    <option value="false">Published (Ready for App)</option>
+                    <option value="true">Draft (Hidden from games)</option>
+                    <option value="false">Published (Live in game)</option>
                   </select>
                 </div>
               </div>
@@ -721,6 +963,16 @@ export const GameQuestionsPage: React.FC = () => {
                 >
                   Cancel
                 </button>
+                {!editingQuestion && (
+                  <button
+                    type="button"
+                    onClick={handleSaveAndAddAnother}
+                    className="btn btn-secondary"
+                    disabled={submitting}
+                  >
+                    {submitting ? 'Saving...' : 'Save & Add Another'}
+                  </button>
+                )}
                 <button type="submit" className="btn btn-primary" disabled={submitting}>
                   {submitting ? 'Saving...' : 'Save Question'}
                 </button>

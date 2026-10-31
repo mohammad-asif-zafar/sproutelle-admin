@@ -142,19 +142,27 @@ export const ExplorerStudioPage: React.FC = () => {
   // Assigned Games for Subcategory Editor
   const [assignedGames, setAssignedGames] = useState<Array<{ game_id: string; enabled_patterns: string[]; sort_order: number; is_active: boolean }>>([]);
 
+  // Counts & Error States
+  const [explorerSubCountMap, setExplorerSubCountMap] = useState<Map<string, number>>(new Map());
+  const [explorerSubCountError, setExplorerSubCountError] = useState<string | null>(null);
+  const [subGameCountMap, setSubGameCountMap] = useState<Map<string, number>>(new Map());
+  const [subGameCountError, setSubGameCountError] = useState<string | null>(null);
+
   const loadData = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setAllGames([
         { id: 'game-1', name: 'Alphabet Safari', slug: 'alphabet-safari', game_type: 'multiple_choice', is_published: true, sort_order: 1, created_at: '', updated_at: '' },
         { id: 'game-2', name: 'Counting Meadow', slug: 'counting-meadow', game_type: 'image_selection', is_published: true, sort_order: 2, created_at: '', updated_at: '' },
       ]);
+      setExplorerSubCountMap(new Map([['exp-1', 2], ['exp-2', 2], ['exp-3', 1]]));
+      setExplorerSubCountError(null);
       return;
     }
 
     try {
       setPageError(null);
 
-      const [expRes, catRes, mediaRes, gamesRes] = await Promise.all([
+      const [expRes, catRes, mediaRes, gamesRes, subCountRes] = await Promise.all([
         supabase
           .from('homescreen_explorer')
           .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
@@ -162,6 +170,7 @@ export const ExplorerStudioPage: React.FC = () => {
         supabase.from('game_categories').select('*').order('sort_order'),
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
         supabase.from('games').select('*').order('sort_order'),
+        supabase.from('homescreen_explorer_subcategories').select('id, explorer_id'),
       ]);
 
       if (expRes.error) {
@@ -174,6 +183,21 @@ export const ExplorerStudioPage: React.FC = () => {
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
       if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
       if (gamesRes.data) setAllGames(gamesRes.data as Game[]);
+
+      if (subCountRes.error) {
+        setExplorerSubCountError(subCountRes.error.message);
+        setExplorerSubCountMap(new Map());
+      } else {
+        setExplorerSubCountError(null);
+        const countMap = new Map<string, number>();
+        ((subCountRes.data as Array<Record<string, unknown>>) || []).forEach((s) => {
+          const expId = s.explorer_id as string;
+          if (expId) {
+            countMap.set(expId, (countMap.get(expId) || 0) + 1);
+          }
+        });
+        setExplorerSubCountMap(countMap);
+      }
     } catch (err) {
       console.error('Failed loading explorer items:', err);
       const msg = err instanceof Error ? err.message : 'Database query failed.';
@@ -192,7 +216,7 @@ export const ExplorerStudioPage: React.FC = () => {
 
     async function initData() {
       try {
-        const [expRes, catRes, mediaRes, gamesRes] = await Promise.all([
+        const [expRes, catRes, mediaRes, gamesRes, subCountRes] = await Promise.all([
           supabase
             .from('homescreen_explorer')
             .select('*, title_image_asset:media_assets(*), category:game_categories(*)')
@@ -200,6 +224,7 @@ export const ExplorerStudioPage: React.FC = () => {
           supabase.from('game_categories').select('*').order('sort_order'),
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
           supabase.from('games').select('*').order('sort_order'),
+          supabase.from('homescreen_explorer_subcategories').select('id, explorer_id'),
         ]);
 
         if (!isMounted) return;
@@ -214,6 +239,21 @@ export const ExplorerStudioPage: React.FC = () => {
         if (catRes.data) setCategories(catRes.data as GameCategory[]);
         if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
         if (gamesRes.data) setAllGames(gamesRes.data as Game[]);
+
+        if (subCountRes.error) {
+          setExplorerSubCountError(subCountRes.error.message);
+          setExplorerSubCountMap(new Map());
+        } else {
+          setExplorerSubCountError(null);
+          const countMap = new Map<string, number>();
+          ((subCountRes.data as Array<Record<string, unknown>>) || []).forEach((s) => {
+            const expId = s.explorer_id as string;
+            if (expId) {
+              countMap.set(expId, (countMap.get(expId) || 0) + 1);
+            }
+          });
+          setExplorerSubCountMap(countMap);
+        }
       } catch (err) {
         console.error('Failed loading explorer items:', err);
         const msg = err instanceof Error ? err.message : 'Database query failed.';
@@ -254,20 +294,40 @@ export const ExplorerStudioPage: React.FC = () => {
           updated_at: new Date().toISOString(),
         },
       ]);
+      setSubGameCountMap(new Map([['sub-1', 1], ['sub-2', 1]]));
+      setSubGameCountError(null);
       setSubcategoriesLoading(false);
       return;
     }
 
     try {
       setSubcategoriesLoading(true);
-      const { data, error } = await supabase
-        .from('homescreen_explorer_subcategories')
-        .select('*, image_asset:media_assets(*), category:game_categories(*)')
-        .eq('explorer_id', explorerId)
-        .order('sort_order', { ascending: true });
+      const [subRes, assignRes] = await Promise.all([
+        supabase
+          .from('homescreen_explorer_subcategories')
+          .select('*, image_asset:media_assets(*), category:game_categories(*)')
+          .eq('explorer_id', explorerId)
+          .order('sort_order', { ascending: true }),
+        supabase.from('subcategory_games').select('subcategory_id, game_id'),
+      ]);
 
-      if (error) throw error;
-      setSubcategories((data as HomescreenExplorerSubcategory[]) || []);
+      if (subRes.error) throw subRes.error;
+      setSubcategories((subRes.data as HomescreenExplorerSubcategory[]) || []);
+
+      if (assignRes.error) {
+        setSubGameCountError(assignRes.error.message);
+        setSubGameCountMap(new Map());
+      } else {
+        setSubGameCountError(null);
+        const countMap = new Map<string, number>();
+        ((assignRes.data as Array<Record<string, unknown>>) || []).forEach((ag) => {
+          const subId = ag.subcategory_id as string;
+          if (subId) {
+            countMap.set(subId, (countMap.get(subId) || 0) + 1);
+          }
+        });
+        setSubGameCountMap(countMap);
+      }
     } catch (err) {
       console.error('Failed loading subcategories:', err);
     } finally {
@@ -671,6 +731,7 @@ export const ExplorerStudioPage: React.FC = () => {
                     <th style={{ padding: '0.875rem 1rem' }}>Subcategory Name</th>
                     <th style={{ padding: '0.875rem 1rem' }}>Image Asset</th>
                     <th style={{ padding: '0.875rem 1rem' }}>Linked Category</th>
+                    <th style={{ padding: '0.875rem 1rem' }}>Games</th>
                     <th style={{ padding: '0.875rem 1rem' }}>Status</th>
                     <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
                   </tr>
@@ -707,12 +768,26 @@ export const ExplorerStudioPage: React.FC = () => {
                         {sub.category?.name || categories.find((c) => c.id === sub.category_id)?.name || 'None'}
                       </td>
                       <td style={{ padding: '0.875rem 1rem' }}>
+                        {subGameCountError ? (
+                          <span style={{ color: 'var(--color-danger)', fontSize: '0.75rem', fontWeight: 600 }} title={subGameCountError}>
+                            Error
+                          </span>
+                        ) : (
+                          <span className="badge badge-secondary" style={{ fontWeight: 700 }}>
+                            {subGameCountMap.get(sub.id) ?? 0}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.875rem 1rem' }}>
                         <span className={`badge ${sub.is_active ? 'badge-success' : 'badge-warning'}`}>
                           {sub.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
+                          <button onClick={() => openEditSubModal(sub)} className="btn btn-secondary btn-sm" title="Add Games & Manage Subcategory">
+                            <Gamepad2 size={14} /> Add Games
+                          </button>
                           <button onClick={() => openEditSubModal(sub)} className="btn btn-secondary btn-sm" title="Edit Subcategory">
                             <Edit2 size={14} />
                           </button>
@@ -1254,6 +1329,7 @@ export const ExplorerStudioPage: React.FC = () => {
                   <th style={{ padding: '0.875rem 1rem' }}>Title Name</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Image Asset</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Linked Category</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Subcategories</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Status</th>
                   <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -1290,6 +1366,17 @@ export const ExplorerStudioPage: React.FC = () => {
                     </td>
                     <td style={{ padding: '0.875rem 1rem' }}>
                       {item.category?.name || categories.find((c) => c.id === item.category_id)?.name || 'None'}
+                    </td>
+                    <td style={{ padding: '0.875rem 1rem' }}>
+                      {explorerSubCountError ? (
+                        <span style={{ color: 'var(--color-danger)', fontSize: '0.75rem', fontWeight: 600 }} title={explorerSubCountError}>
+                          Error
+                        </span>
+                      ) : (
+                        <span className="badge badge-secondary" style={{ fontWeight: 700 }}>
+                          {explorerSubCountMap.get(item.id) ?? 0}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '0.875rem 1rem' }}>
                       <span className={`badge ${item.is_active ? 'badge-success' : 'badge-warning'}`}>

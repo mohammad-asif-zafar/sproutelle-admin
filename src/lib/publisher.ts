@@ -4,7 +4,8 @@
  */
 
 import type { Game, Question, MediaAsset } from '../types/database';
-import { validateEngineConfig, type EngineType } from '../types/engine';
+import type { EngineType } from '../types/engine';
+import { validateGameActivity } from './validation/gameValidator';
 
 export interface ReleasePackSnapshot {
   pack_version: string;
@@ -52,90 +53,28 @@ export function validateActivityForPublication(
   questions: Question[],
   availableMediaAssets: MediaAsset[] = []
 ): ValidationReport {
-  const errors: string[] = [];
-  const warnings: string[] = [];
+  const result = validateGameActivity(game, questions, availableMediaAssets);
 
-  // 1. Basic Metadata Check
-  if (!game.name || !game.name.trim()) {
-    errors.push('Game name is required.');
-  }
-  if (!game.slug || !game.slug.trim()) {
-    errors.push('Game URL slug is required.');
-  }
+  const errors = result.errors.map((e) => e.message);
+  const warnings = result.warnings.map((w) => w.message);
 
-  // 2. Location Assignment Check
-  if (!game.category_id && !game.subcategory_id) {
-    warnings.push('Game is not assigned to a learning category or Home Explorer subcategory.');
-  }
-
-  // 3. Engine Config Validation
-  const engineType = (game.game_type as EngineType) || 'guess_game';
-  const rawConfig = (game as unknown as { config?: Record<string, unknown> }).config || {};
-  const configValidation = validateEngineConfig(engineType, rawConfig);
-  if (!configValidation.valid) {
-    errors.push(...configValidation.errors);
-  }
-
-  // 4. Eligible Questions Validation
-  const publishedQuestions = questions.filter((q) => !q.is_draft);
-  const requiredCount = Number(rawConfig.question_count || 5);
-
-  if (publishedQuestions.length === 0) {
-    errors.push('Activity has 0 published questions. Add and publish questions before publishing the game.');
-  } else if (publishedQuestions.length < requiredCount) {
-    errors.push(
-      `Engine configuration requires ${requiredCount} questions per session, but only ${publishedQuestions.length} published questions exist.`
-    );
-  }
-
-  // 5. Individual Question & Options Validation
-  const assetIdsSet = new Set<string>();
-
-  publishedQuestions.forEach((q, idx) => {
-    const qNum = idx + 1;
-    if (!q.question_text || !q.question_text.trim()) {
-      errors.push(`Question #${qNum} is missing prompt text.`);
-    }
-
-    if (q.image_asset_id) assetIdsSet.add(q.image_asset_id);
-    if (q.audio_asset_id) assetIdsSet.add(q.audio_asset_id);
-
-    const opts = q.options || [];
-    if (opts.length < 2) {
-      errors.push(`Question #${qNum} requires at least 2 answer options.`);
-    }
-
-    const correctOpts = opts.filter((o) => o.is_correct);
-    if (correctOpts.length === 0) {
-      errors.push(`Question #${qNum} ("${q.question_text.slice(0, 30)}...") has no correct answer selected.`);
-    }
-
-    if (q.question_type === 'true_false') {
-      if (opts.length !== 2) {
-        errors.push(`Question #${qNum} (True/False mode) must have exactly 2 options.`);
-      }
-      if (correctOpts.length !== 1) {
-        errors.push(`Question #${qNum} (True/False mode) must have exactly 1 correct answer.`);
-      }
-    }
-
-    if (q.question_type === 'image_selection') {
-      const missingOptionImg = opts.some((o) => !o.media_asset_id && !o.media_asset);
-      if (missingOptionImg) {
-        errors.push(`Question #${qNum} (Image Selection mode) requires an image asset for every answer option.`);
-      }
-    }
-
-    opts.forEach((o) => {
-      if (o.media_asset_id) assetIdsSet.add(o.media_asset_id);
-      if (o.media_asset?.id) assetIdsSet.add(o.media_asset.id);
-    });
-  });
-
-  // 6. Build Snapshot if Eligible
   let snapshot: ReleasePackSnapshot | null = null;
 
-  if (errors.length === 0) {
+  if (result.valid) {
+    const assetIdsSet = new Set<string>();
+    const publishedQuestions = questions.filter((q) => !q.is_draft);
+    const engineType = (game.game_type as EngineType) || 'guess_game';
+    const rawConfig = game.config || {};
+
+    publishedQuestions.forEach((q) => {
+      if (q.image_asset_id) assetIdsSet.add(q.image_asset_id);
+      if (q.audio_asset_id) assetIdsSet.add(q.audio_asset_id);
+      (q.options || []).forEach((o) => {
+        if (o.media_asset_id) assetIdsSet.add(o.media_asset_id);
+        if (o.media_asset?.id) assetIdsSet.add(o.media_asset.id);
+      });
+    });
+
     const referencedAssets = availableMediaAssets
       .filter((a) => assetIdsSet.has(a.id))
       .map((a) => ({
@@ -176,7 +115,7 @@ export function validateActivityForPublication(
   }
 
   return {
-    eligible: errors.length === 0,
+    eligible: result.valid,
     errors,
     warnings,
     snapshot,

@@ -6,63 +6,35 @@ import {
   Search,
   Trash2,
   Edit2,
+  Copy,
   HelpCircle,
   Eye,
-  Copy,
-  CheckCircle,
-  AlertTriangle,
-  Download,
+  CheckCircle2,
+  AlertCircle,
+  Upload,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Game, GameCategory, HomescreenExplorerSubcategory, Question, MediaAsset } from '../types/database';
-import { Modal } from '../components/Common/Modal';
+import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { validateActivityForPublication, type ValidationReport } from '../lib/publisher';
-
-const GAME_TEMPLATES = [
-  { label: 'Multiple Choice (Guess Game)', value: 'multiple_choice' },
-  { label: 'Image Selection', value: 'image_selection' },
-  { label: 'Audio Recognition / Listen & Guess', value: 'audio_recognition' },
-  { label: 'Matching Pairs (Matching Fun)', value: 'matching' },
-  { label: 'True / False (Garden Quiz)', value: 'true_false' },
-];
+import { Modal } from '../components/Common/Modal';
 
 export const GamesStudioPage: React.FC = () => {
   const navigate = useNavigate();
 
-  const [gamesList, setGamesList] = useState<Game[]>(
-    !isSupabaseConfigured
-      ? [
-          {
-            id: 'game-1',
-            name: 'Alphabet Safari',
-            slug: 'alphabet-safari',
-            game_type: 'multiple_choice',
-            is_published: true,
-            sort_order: 1,
-            description: 'Learn letter sounds with friendly jungle animals.',
-            config: { question_count: 5, difficulty: 'beginner', min_age: 3, max_age: 6, hints_enabled: true, audio_narration: true },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-          {
-            id: 'game-2',
-            name: 'Counting Meadow',
-            slug: 'counting-meadow',
-            game_type: 'image_selection',
-            is_published: false,
-            sort_order: 2,
-            description: 'Count objects in the sunny meadow.',
-            config: { question_count: 4, difficulty: 'beginner', min_age: 3, max_age: 5, hints_enabled: true, audio_narration: true },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ]
-      : []
-  );
+  const [gamesList, setGamesList] = useState<Game[]>([]);
   const [categories, setCategories] = useState<GameCategory[]>([]);
   const [subcategories, setSubcategories] = useState<HomescreenExplorerSubcategory[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
+  const [gameSubcategoryMap, setGameSubcategoryMap] = useState<Map<string, string[]>>(new Map());
+  const [gameQuestionCountMap, setGameQuestionCountMap] = useState<Map<string, number>>(new Map());
+  const [gameQuestionCountError, setGameQuestionCountError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
+  const [pageError, setPageError] = useState<string | null>(
+    !isSupabaseConfigured
+      ? 'Supabase is not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env file to load production games.'
+      : null
+  );
 
   // Filters
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -86,7 +58,7 @@ export const GamesStudioPage: React.FC = () => {
   const [gameName, setGameName] = useState<string>('');
   const [gameSlug, setGameSlug] = useState<string>('');
   const [categoryId, setCategoryId] = useState<string>('');
-  const [subcategoryId, setSubcategoryId] = useState<string>('');
+  const [selectedSubcategoryIds, setSelectedSubcategoryIds] = useState<string[]>([]);
   const [gameType, setGameType] = useState<string>('multiple_choice');
   const [description, setDescription] = useState<string>('');
   const [isPublished, setIsPublished] = useState<boolean>(false);
@@ -102,30 +74,70 @@ export const GamesStudioPage: React.FC = () => {
 
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [pageError, setPageError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      setPageError('Supabase is not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env file to load production games.');
+      setLoading(false);
+      return;
+    }
 
     try {
       setPageError(null);
 
-      const [gamesRes, catRes, subRes, mediaRes] = await Promise.all([
+      const [gamesRes, catRes, subRes, mediaRes, assignRes, qRes] = await Promise.all([
         supabase
           .from('games')
-          .select('*, category:game_categories(*), subcategory:homescreen_explorer_subcategories(*)')
+          .select('*, category:game_categories(*)')
           .order('sort_order', { ascending: true }),
         supabase.from('game_categories').select('*').order('sort_order'),
         supabase.from('homescreen_explorer_subcategories').select('*').order('sort_order'),
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
+        supabase.from('subcategory_games').select('*'),
+        supabase.from('questions').select('game_id'),
       ]);
 
-      if (gamesRes.error) {
-        console.warn('Games query warning:', gamesRes.error.message);
-        setPageError(`Supabase table warning: ${gamesRes.error.message}`);
-      } else if (gamesRes.data) {
-        setGamesList(gamesRes.data as Game[]);
+      if (gamesRes.error) throw gamesRes.error;
+      if (catRes.error) throw catRes.error;
+      if (subRes.error) throw subRes.error;
+      if (mediaRes.error) throw mediaRes.error;
+      if (assignRes.error) throw assignRes.error;
+
+      if (qRes.error) {
+        setGameQuestionCountError(qRes.error.message);
+        setGameQuestionCountMap(new Map());
+      } else {
+        setGameQuestionCountError(null);
+        const qMap = new Map<string, number>();
+        ((qRes.data as Array<{ game_id: string }>) || []).forEach((q) => {
+          if (q.game_id) {
+            qMap.set(q.game_id, (qMap.get(q.game_id) || 0) + 1);
+          }
+        });
+        setGameQuestionCountMap(qMap);
       }
+
+      const subList = (subRes.data as HomescreenExplorerSubcategory[]) || [];
+      const assignList = (assignRes.data as Array<{ game_id: string; subcategory_id: string }>) || [];
+      const gameSubMap = new Map<string, string[]>();
+      assignList.forEach((a) => {
+        const list = gameSubMap.get(a.game_id) || [];
+        list.push(a.subcategory_id);
+        gameSubMap.set(a.game_id, list);
+      });
+      setGameSubcategoryMap(gameSubMap);
+
+      const enrichedGames = (gamesRes.data as Game[]).map((g) => {
+        const subIds = gameSubMap.get(g.id) || [];
+        const primarySubId = subIds.length > 0 ? subIds[0] : null;
+        const subObj = primarySubId ? subList.find((s) => s.id === primarySubId) || null : null;
+        return {
+          ...g,
+          subcategory_id: primarySubId,
+          subcategory: subObj,
+        };
+      });
+      setGamesList(enrichedGames);
 
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
       if (subRes.data) setSubcategories(subRes.data as HomescreenExplorerSubcategory[]);
@@ -145,24 +157,61 @@ export const GamesStudioPage: React.FC = () => {
 
     async function init() {
       try {
-        const [gamesRes, catRes, subRes, mediaRes] = await Promise.all([
+        const [gamesRes, catRes, subRes, mediaRes, assignRes, qRes] = await Promise.all([
           supabase
             .from('games')
-            .select('*, category:game_categories(*), subcategory:homescreen_explorer_subcategories(*)')
+            .select('*, category:game_categories(*)')
             .order('sort_order', { ascending: true }),
           supabase.from('game_categories').select('*').order('sort_order'),
           supabase.from('homescreen_explorer_subcategories').select('*').order('sort_order'),
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
+          supabase.from('subcategory_games').select('*'),
+          supabase.from('questions').select('game_id'),
         ]);
 
         if (!isMounted) return;
 
-        if (gamesRes.error) {
-          console.warn('Games query warning:', gamesRes.error.message);
-          setPageError(`Supabase table warning: ${gamesRes.error.message}`);
-        } else if (gamesRes.data) {
-          setGamesList(gamesRes.data as Game[]);
+        if (gamesRes.error) throw gamesRes.error;
+        if (catRes.error) throw catRes.error;
+        if (subRes.error) throw subRes.error;
+        if (mediaRes.error) throw mediaRes.error;
+        if (assignRes.error) throw assignRes.error;
+
+        if (qRes.error) {
+          setGameQuestionCountError(qRes.error.message);
+          setGameQuestionCountMap(new Map());
+        } else {
+          setGameQuestionCountError(null);
+          const qMap = new Map<string, number>();
+          ((qRes.data as Array<{ game_id: string }>) || []).forEach((q) => {
+            if (q.game_id) {
+              qMap.set(q.game_id, (qMap.get(q.game_id) || 0) + 1);
+            }
+          });
+          setGameQuestionCountMap(qMap);
         }
+
+        const subList = (subRes.data as HomescreenExplorerSubcategory[]) || [];
+        const assignList = (assignRes.data as Array<{ game_id: string; subcategory_id: string }>) || [];
+        const gameSubMap = new Map<string, string[]>();
+        assignList.forEach((a) => {
+          const list = gameSubMap.get(a.game_id) || [];
+          list.push(a.subcategory_id);
+          gameSubMap.set(a.game_id, list);
+        });
+        setGameSubcategoryMap(gameSubMap);
+
+        const enrichedGames = (gamesRes.data as Game[]).map((g) => {
+          const subIds = gameSubMap.get(g.id) || [];
+          const primarySubId = subIds.length > 0 ? subIds[0] : null;
+          const subObj = primarySubId ? subList.find((s) => s.id === primarySubId) || null : null;
+          return {
+            ...g,
+            subcategory_id: primarySubId,
+            subcategory: subObj,
+          };
+        });
+        setGamesList(enrichedGames);
 
         if (catRes.data) setCategories(catRes.data as GameCategory[]);
         if (subRes.data) setSubcategories(subRes.data as HomescreenExplorerSubcategory[]);
@@ -188,7 +237,7 @@ export const GamesStudioPage: React.FC = () => {
     setGameName('');
     setGameSlug('');
     setCategoryId(categories[0]?.id || '');
-    setSubcategoryId('');
+    setSelectedSubcategoryIds([]);
     setGameType('multiple_choice');
     setQuestionCount(5);
     setDifficulty('beginner');
@@ -203,13 +252,29 @@ export const GamesStudioPage: React.FC = () => {
     setModalOpen(true);
   };
 
-  const openEditModal = (game: Game) => {
+  const openEditModal = async (game: Game) => {
     setEditingGame(game);
     setGameName(game.name);
     setGameSlug(game.slug);
     setCategoryId(game.category_id || '');
-    setSubcategoryId(game.subcategory_id || '');
     setGameType(game.game_type || 'multiple_choice');
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('subcategory_games')
+          .select('subcategory_id')
+          .eq('game_id', game.id);
+        if (error) throw error;
+        setSelectedSubcategoryIds((data || []).map((d) => d.subcategory_id));
+      } catch (err) {
+        console.error('Failed loading subcategory assignments for edit:', err);
+        alert('Failed loading existing subcategory assignments. Cannot open edit form safely.');
+        return;
+      }
+    } else {
+      setSelectedSubcategoryIds([]);
+    }
 
     const cfg = game.config || {};
     setQuestionCount(Number(cfg.question_count || 5));
@@ -264,7 +329,6 @@ export const GamesStudioPage: React.FC = () => {
       name: gameName.trim(),
       slug: gameSlug.trim(),
       category_id: categoryId || null,
-      subcategory_id: subcategoryId || null,
       game_type: gameType,
       config: configPayload,
       description: description.trim() || null,
@@ -274,30 +338,48 @@ export const GamesStudioPage: React.FC = () => {
     };
 
     if (!isSupabaseConfigured) {
-      if (editingGame) {
-        setGamesList((prev) =>
-          prev.map((g) => (g.id === editingGame.id ? { ...g, ...payload } : g))
-        );
-      } else {
-        const newGame: Game = {
-          id: `game-${Date.now()}`,
-          created_at: new Date().toISOString(),
-          ...payload,
-        };
-        setGamesList((prev) => [...prev, newGame]);
-      }
-      setModalOpen(false);
+      setFormError('Supabase is not configured. Cannot save game.');
       return;
     }
 
     try {
       setSubmitting(true);
+      let gameId = editingGame?.id;
       if (editingGame) {
-        const { error } = await supabase.from('games').update(payload).eq('id', editingGame.id);
+        const { error } = await supabase.from('games').update(payload).eq('id', gameId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('games').insert(payload);
+        const { data: insertedGame, error } = await supabase.from('games').insert(payload).select().single();
         if (error) throw error;
+        gameId = insertedGame.id;
+      }
+
+      // Safe non-atomic junction sync with error checking and rollback restoration
+      if (gameId) {
+        const { data: oldAssign, error: queryErr } = await supabase.from('subcategory_games').select('*').eq('game_id', gameId);
+        if (queryErr) throw queryErr;
+
+        const { error: delErr } = await supabase.from('subcategory_games').delete().eq('game_id', gameId);
+        if (delErr) throw delErr;
+
+        if (selectedSubcategoryIds.length > 0) {
+          const rows = selectedSubcategoryIds.map((subId) => ({
+            subcategory_id: subId,
+            game_id: gameId,
+            sort_order: 1,
+            is_active: true,
+          }));
+          const { error: insErr } = await supabase.from('subcategory_games').insert(rows);
+          if (insErr) {
+            if (oldAssign && oldAssign.length > 0) {
+              const { error: rbErr } = await supabase.from('subcategory_games').insert(oldAssign);
+              if (rbErr) {
+                throw new Error(`Assignment insertion failed (${insErr.message}), and rollback restoration also failed (${rbErr.message}).`);
+              }
+            }
+            throw insErr;
+          }
+        }
       }
 
       await loadData();
@@ -312,36 +394,64 @@ export const GamesStudioPage: React.FC = () => {
   };
 
   const handleDuplicate = async (game: Game) => {
+    if (!isSupabaseConfigured) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
     const clonedPayload = {
       name: `${game.name} (Copy)`,
       slug: `${game.slug}-copy-${Date.now().toString().slice(-4)}`,
       category_id: game.category_id,
-      subcategory_id: game.subcategory_id,
       game_type: game.game_type,
       config: game.config || {},
       description: game.description,
-      is_published: false,
+      is_published: false, // Ensure duplicate is created unpublished
       sort_order: gamesList.length + 1,
+      updated_at: new Date().toISOString(),
     };
 
-    if (!isSupabaseConfigured) {
-      const newGame: Game = {
-        id: `game-${Date.now()}`,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        ...clonedPayload,
-      };
-      setGamesList((prev) => [...prev, newGame]);
-      return;
-    }
-
+    let insertedGameId: string | null = null;
     try {
-      const { error } = await supabase.from('games').insert(clonedPayload);
+      const { data: insertedGame, error } = await supabase.from('games').insert(clonedPayload).select().single();
       if (error) throw error;
+      insertedGameId = insertedGame.id;
+
+      if (insertedGame) {
+        const { data: assignData, error: assignErr } = await supabase
+          .from('subcategory_games')
+          .select('subcategory_id')
+          .eq('game_id', game.id);
+        if (assignErr) throw assignErr;
+
+        if (assignData && assignData.length > 0) {
+          const rows = assignData.map((a) => ({
+            subcategory_id: a.subcategory_id,
+            game_id: insertedGame.id,
+            sort_order: 1,
+            is_active: true,
+          }));
+          const { error: insAssignErr } = await supabase.from('subcategory_games').insert(rows);
+          if (insAssignErr) throw insAssignErr;
+        }
+      }
+
       await loadData();
     } catch (err) {
-      console.error('Failed duplicating game:', err);
-      alert('Failed to duplicate game.');
+      console.error('Failed duplicating game securely:', err);
+      if (insertedGameId) {
+        try {
+          const { error: rbErr } = await supabase.from('games').delete().eq('id', insertedGameId);
+          if (rbErr) {
+            console.error('Rollback deletion failed:', rbErr);
+            alert(`Duplication failed and automatic cleanup rollback also failed: ${rbErr.message}. Original error: ${err instanceof Error ? err.message : 'Unknown'}`);
+            return;
+          }
+        } catch (rbEx) {
+          console.error('Rollback exception:', rbEx);
+        }
+      }
+      alert('Failed to duplicate game securely. Incomplete record removed successfully.');
     }
   };
 
@@ -362,23 +472,6 @@ export const GamesStudioPage: React.FC = () => {
       } catch (err) {
         console.error('Failed loading questions for validation:', err);
       }
-    } else {
-      questions = [
-        {
-          id: 'q-demo-1',
-          game_id: game.id,
-          question_text: 'Sample prompt text',
-          question_type: game.game_type || 'multiple_choice',
-          is_draft: false,
-          sort_order: 1,
-          created_at: '',
-          updated_at: '',
-          options: [
-            { id: 'o1', question_id: 'q-demo-1', option_text: 'Option A', is_correct: true, sort_order: 1, created_at: '' },
-            { id: 'o2', question_id: 'q-demo-1', option_text: 'Option B', is_correct: false, sort_order: 2, created_at: '' },
-          ],
-        },
-      ];
     }
 
     const report = validateActivityForPublication(game, questions, mediaAssets);
@@ -386,74 +479,39 @@ export const GamesStudioPage: React.FC = () => {
   };
 
   const handlePublishToSupabase = async () => {
-    if (!validationReport?.snapshot || !previewGame) return;
-    setPublishErrorMsg(null);
-    setPublishSuccessMsg(null);
-
-    const snapshot = validationReport.snapshot;
-
-    if (!isSupabaseConfigured) {
-      setPublishSuccessMsg(`[Demo Mode Simulation] Successfully simulated publishing version ${snapshot.pack_version} for "${previewGame.name}" (Supabase is not configured; record not persisted remotely).`);
-      setGamesList((prev) =>
-        prev.map((g) => (g.id === previewGame.id ? { ...g, is_published: true } : g))
-      );
-      setPreviewGame((prev) => (prev ? { ...prev, is_published: true } : null));
+    if (!previewGame || !validationReport || !validationReport.eligible || !validationReport.snapshot) {
       return;
     }
 
     try {
       setPublishingToSupabase(true);
+      setPublishErrorMsg(null);
+      setPublishSuccessMsg(null);
 
       const { data, error } = await supabase.rpc('publish_game_release', {
         p_game_id: previewGame.id,
-        p_version_number: snapshot.pack_version,
-        p_pack_data: snapshot,
+        p_version_number: validationReport.snapshot.pack_version,
+        p_pack_data: validationReport.snapshot,
       });
 
       if (error) throw error;
-      if (data === false) throw new Error('Atomic publication transaction returned false.');
+      if (data === false) throw new Error('Publish function returned false.');
 
-      setPublishSuccessMsg(`Successfully published version ${snapshot.pack_version} atomically to Supabase and archived prior versions!`);
+      setPublishSuccessMsg(`Successfully published version ${validationReport.snapshot.pack_version} to Supabase!`);
       await loadData();
-      setPreviewGame((prev) => (prev ? { ...prev, is_published: true } : null));
     } catch (err) {
       console.error('Failed publishing release to Supabase:', err);
-      const msg = err instanceof Error ? err.message : 'Database publish failed. Please ensure migration 20260330000500_atomic_publish_function.sql has been applied.';
+      const msg = err instanceof Error ? err.message : 'Database publish failed.';
       setPublishErrorMsg(msg);
     } finally {
       setPublishingToSupabase(false);
     }
   };
 
-  const handleTogglePublish = async (game: Game) => {
-    const newStatus = !game.is_published;
-    if (!isSupabaseConfigured) {
-      setGamesList((prev) =>
-        prev.map((g) => (g.id === game.id ? { ...g, is_published: newStatus } : g))
-      );
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('games')
-        .update({ is_published: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', game.id);
-      if (error) throw error;
-      setGamesList((prev) =>
-        prev.map((g) => (g.id === game.id ? { ...g, is_published: newStatus } : g))
-      );
-    } catch (err) {
-      console.error('Failed toggling publication status:', err);
-      alert('Failed to update publication status.');
-    }
-  };
-
   const handleDelete = async () => {
     if (!deleteConfirmGame) return;
     if (!isSupabaseConfigured) {
-      setGamesList((prev) => prev.filter((g) => g.id !== deleteConfirmGame.id));
-      setDeleteConfirmGame(null);
+      alert('Supabase is not configured.');
       return;
     }
 
@@ -464,21 +522,20 @@ export const GamesStudioPage: React.FC = () => {
       setDeleteConfirmGame(null);
     } catch (err) {
       console.error('Failed deleting game:', err);
-      alert('Failed to delete game.');
+      alert('Failed deleting game.');
     }
   };
 
-  const filteredGames = gamesList.filter((game) => {
-    const matchesSearch = game.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          game.slug.toLowerCase().includes(searchQuery.toLowerCase());
-    if (!matchesSearch) return false;
+  const filtered = gamesList.filter((game) => {
+    const matchesSearch = game.name.toLowerCase().includes(searchQuery.toLowerCase()) || game.slug.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesTemplate = selectedTemplate === 'all' || game.game_type === selectedTemplate;
+    const matchesCategory = selectedCategory === 'all' || game.category_id === selectedCategory;
+    const matchesStatus =
+      selectedStatus === 'all' ||
+      (selectedStatus === 'published' && game.is_published) ||
+      (selectedStatus === 'draft' && !game.is_published);
 
-    if (selectedTemplate !== 'all' && game.game_type !== selectedTemplate) return false;
-    if (selectedCategory !== 'all' && game.category_id !== selectedCategory) return false;
-    if (selectedStatus === 'published' && !game.is_published) return false;
-    if (selectedStatus === 'draft' && game.is_published) return false;
-
-    return true;
+    return matchesSearch && matchesTemplate && matchesCategory && matchesStatus;
   });
 
   return (
@@ -488,14 +545,14 @@ export const GamesStudioPage: React.FC = () => {
         <div className="page-title">
           <h2 style={{ color: 'var(--color-primary-dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Gamepad2 color="var(--color-primary)" size={28} />
-            Games Management
+            Learning Games Catalog
           </h2>
           <p className="page-subtitle">
-            Create reusable learning games, configure question templates, and assign activities to explorer subcategories.
+            Configure learning game engines, metadata, session difficulty rules, question counts, and publishing releases.
           </p>
         </div>
         <button onClick={openCreateModal} className="btn btn-primary btn-sm">
-          <Plus size={16} /> Add Game
+          <Plus size={16} /> Add Learning Game
         </button>
       </div>
 
@@ -515,10 +572,9 @@ export const GamesStudioPage: React.FC = () => {
         </div>
       )}
 
-      {/* Filters Toolbar */}
+      {/* Filters Bar */}
       <div className="card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-          {/* Search */}
           <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
             <Search size={18} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-light)' }} />
             <input
@@ -531,43 +587,39 @@ export const GamesStudioPage: React.FC = () => {
             />
           </div>
 
-          {/* Template Filter */}
-          <select
-            className="form-select"
-            value={selectedTemplate}
-            onChange={(e) => setSelectedTemplate(e.target.value)}
-            style={{ width: '200px' }}
-          >
-            <option value="all">All Templates</option>
-            {GAME_TEMPLATES.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <select
+              className="form-select form-select-sm"
+              value={selectedTemplate}
+              onChange={(e) => setSelectedTemplate(e.target.value)}
+            >
+              <option value="all">All Engine Templates</option>
+              {Object.entries(GAME_ENGINE_REGISTRY).map(([key, def]) => (
+                <option key={key} value={key}>{def.name}</option>
+              ))}
+            </select>
 
-          {/* Category Filter */}
-          <select
-            className="form-select"
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            style={{ width: '180px' }}
-          >
-            <option value="all">All Categories</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+            <select
+              className="form-select form-select-sm"
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+            >
+              <option value="all">All Topics</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
 
-          {/* Status Filter */}
-          <select
-            className="form-select"
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            style={{ width: '150px' }}
-          >
-            <option value="all">All Status</option>
-            <option value="published">Published</option>
-            <option value="draft">Draft</option>
-          </select>
+            <select
+              className="form-select form-select-sm"
+              value={selectedStatus}
+              onChange={(e) => setSelectedStatus(e.target.value)}
+            >
+              <option value="all">All Statuses</option>
+              <option value="published">Published</option>
+              <option value="draft">Draft</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -575,62 +627,79 @@ export const GamesStudioPage: React.FC = () => {
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-            Loading games catalog...
+            Loading learning games catalog...
           </div>
-        ) : filteredGames.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-            <Gamepad2 size={36} style={{ marginBottom: '0.5rem', opacity: 0.4 }} />
-            <p>No games found matching your filters.</p>
+            No games found matching criteria.
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ backgroundColor: 'var(--color-surface-muted)', borderBottom: '1px solid var(--color-border)' }}>
-                  <th style={{ padding: '0.875rem 1rem' }}>Game Title & Slug</th>
-                  <th style={{ padding: '0.875rem 1rem' }}>Template / Type</th>
-                  <th style={{ padding: '0.875rem 1rem' }}>Learning Topic</th>
-                  <th style={{ padding: '0.875rem 1rem' }}>Subcategory</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Order</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Game Name</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Engine Template</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Topic Category</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Subcategories</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Questions</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Status</th>
                   <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredGames.map((game) => {
-                  const templateLabel = GAME_TEMPLATES.find((t) => t.value === game.game_type)?.label || game.game_type;
-                  const categoryName = game.category?.name || categories.find((c) => c.id === game.category_id)?.name || 'General';
-                  const subcategoryName = game.subcategory?.name || subcategories.find((s) => s.id === game.subcategory_id)?.name || 'None';
+                {filtered.map((game) => {
+                  const engineDef = GAME_ENGINE_REGISTRY[game.game_type as EngineType] || GAME_ENGINE_REGISTRY.guess_game;
+                  const assignedSubIds = gameSubcategoryMap.get(game.id) || [];
+                  const subcategoryNames = assignedSubIds.length > 0
+                    ? assignedSubIds.map((sid) => subcategories.find((s) => s.id === sid)?.name).filter(Boolean).join(', ')
+                    : 'None';
 
                   return (
                     <tr key={game.id} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
+                      <td style={{ padding: '0.875rem 1rem', fontWeight: 700 }}>#{game.sort_order}</td>
                       <td style={{ padding: '0.875rem 1rem' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--color-text)' }}>{game.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-                          /{game.slug}
-                        </div>
+                        <div style={{ fontWeight: 700, color: '#0F2D4A' }}>{game.name}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>/{game.slug}</div>
                       </td>
                       <td style={{ padding: '0.875rem 1rem' }}>
-                        <span className="badge badge-primary">{templateLabel}</span>
+                        <span className="badge badge-primary">{engineDef.name}</span>
                       </td>
-                      <td style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>{categoryName}</td>
-                      <td style={{ padding: '0.875rem 1rem', color: 'var(--color-text-muted)' }}>{subcategoryName}</td>
                       <td style={{ padding: '0.875rem 1rem' }}>
-                        <button
-                          type="button"
-                          onClick={() => handleTogglePublish(game)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                          title="Click to toggle publication status"
-                        >
-                          <span className={`badge ${game.is_published ? 'badge-success' : 'badge-warning'}`}>
-                            {game.is_published ? 'Published' : 'Draft'}
+                        {game.category?.name || categories.find((c) => c.id === game.category_id)?.name || 'None'}
+                      </td>
+                      <td style={{ padding: '0.875rem 1rem', color: 'var(--color-text-muted)' }}>
+                        {subcategoryNames}
+                      </td>
+                      <td style={{ padding: '0.875rem 1rem' }}>
+                        {gameQuestionCountError ? (
+                          <span style={{ color: 'var(--color-danger)', fontSize: '0.75rem', fontWeight: 600 }} title={gameQuestionCountError}>
+                            Error
                           </span>
-                        </button>
+                        ) : (
+                          <span className="badge badge-secondary" style={{ fontWeight: 700 }}>
+                            {gameQuestionCountMap.get(game.id) ?? 0}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.875rem 1rem' }}>
+                        <span className={`badge ${game.is_published ? 'badge-success' : 'badge-warning'}`}>
+                          {game.is_published ? 'Published' : 'Draft'}
+                        </span>
                       </td>
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
                           <button
-                            onClick={() => navigate(`/games/${game.id}/questions`)}
+                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { openAddModal: true } })}
                             className="btn btn-primary btn-sm"
+                            title="Add Question"
+                          >
+                            <Plus size={14} /> Add Question
+                          </button>
+                          <button
+                            onClick={() => navigate(`/games/${game.id}/questions`)}
+                            className="btn btn-secondary btn-sm"
                             title="Manage Questions"
                           >
                             <HelpCircle size={14} /> Questions
@@ -638,16 +707,9 @@ export const GamesStudioPage: React.FC = () => {
                           <button
                             onClick={() => openPreviewAndPublicationValidator(game)}
                             className="btn btn-secondary btn-sm"
-                            title="Preview Game & Publication Validator"
+                            title="Preview & Validate Publication"
                           >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            onClick={() => openEditModal(game)}
-                            className="btn btn-secondary btn-sm"
-                            title="Edit Game"
-                          >
-                            <Edit2 size={14} />
+                            <Eye size={14} /> Publish
                           </button>
                           <button
                             onClick={() => handleDuplicate(game)}
@@ -655,6 +717,13 @@ export const GamesStudioPage: React.FC = () => {
                             title="Duplicate Game"
                           >
                             <Copy size={14} />
+                          </button>
+                          <button
+                            onClick={() => openEditModal(game)}
+                            className="btn btn-secondary btn-sm"
+                            title="Edit Game"
+                          >
+                            <Edit2 size={14} />
                           </button>
                           <button
                             onClick={() => setDeleteConfirmGame(game)}
@@ -679,7 +748,8 @@ export const GamesStudioPage: React.FC = () => {
         <Modal
           isOpen={modalOpen}
           onClose={() => setModalOpen(false)}
-          title={editingGame ? 'Edit Learning Game' : 'Create New Learning Game'}
+          title={editingGame ? 'Edit Learning Game' : 'Add New Learning Game'}
+          maxWidth="700px"
         >
           {formError && (
             <div
@@ -721,41 +791,94 @@ export const GamesStudioPage: React.FC = () => {
                 <input
                   type="text"
                   className="form-control"
-                  placeholder="alphabet-safari"
+                  placeholder="e.g. alphabet-safari"
                   value={gameSlug}
                   onChange={(e) => setGameSlug(e.target.value)}
                   required
                 />
               </div>
 
-              {/* Game Template */}
+              {/* Engine Template Selection */}
               <div className="input-group">
-                <label className="input-label">Game Template / Type</label>
+                <label className="input-label">Engine Template</label>
                 <select
                   className="form-select"
                   value={gameType}
                   onChange={(e) => setGameType(e.target.value)}
                 >
-                  {GAME_TEMPLATES.map((t) => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                  {Object.entries(GAME_ENGINE_REGISTRY).map(([key, def]) => (
+                    <option key={key} value={key}>
+                      {def.name} — {def.description}
+                    </option>
                   ))}
                 </select>
               </div>
 
-              {/* Engine Configuration Options */}
+              {/* Topic Category */}
+              <div className="input-group">
+                <label className="input-label">Topic Category</label>
+                <select
+                  className="form-select"
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                >
+                  <option value="">None</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Home Explorer Subcategories (Multi-select) */}
+              <div className="input-group">
+                <label className="input-label">Home Explorer Subcategories (Multi-select)</label>
+                <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {subcategories.length === 0 ? (
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>No subcategories configured yet.</span>
+                  ) : (
+                    subcategories.map((sub) => {
+                      const isChecked = selectedSubcategoryIds.includes(sub.id);
+                      return (
+                        <label key={sub.id} style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setSelectedSubcategoryIds((prev) =>
+                                checked ? [...prev, sub.id] : prev.filter((id) => id !== sub.id)
+                              );
+                            }}
+                          />
+                          {sub.name}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+                <small style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                  Assigns this game to one or more homescreen subcategories via the canonical junction table.
+                </small>
+              </div>
+
+              {/* Engine Configuration Section */}
               <div style={{ backgroundColor: 'var(--color-surface-muted)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
-                <h4 style={{ fontSize: '0.875rem', fontWeight: 700, marginBottom: '0.75rem' }}>Engine Configuration</h4>
+                <h4 style={{ fontSize: '0.875rem', fontWeight: 700, margin: '0 0 0.75rem 0', color: 'var(--color-primary-dark)' }}>
+                  Engine Configuration Parameters
+                </h4>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                   <div className="input-group">
-                    <label className="input-label">Questions per Session</label>
+                    <label className="input-label">Questions Per Session</label>
                     <input
                       type="number"
                       className="form-control"
-                      value={questionCount}
-                      onChange={(e) => setQuestionCount(Number(e.target.value))}
                       min={1}
                       max={20}
+                      value={questionCount}
+                      onChange={(e) => setQuestionCount(Number(e.target.value))}
                     />
                   </div>
 
@@ -766,104 +889,69 @@ export const GamesStudioPage: React.FC = () => {
                       value={difficulty}
                       onChange={(e) => setDifficulty(e.target.value as 'beginner' | 'intermediate' | 'advanced')}
                     >
-                      <option value="beginner">Beginner (Ages 3-5)</option>
-                      <option value="intermediate">Intermediate (Ages 5-7)</option>
-                      <option value="advanced">Advanced (Ages 6-8)</option>
+                      <option value="beginner">Beginner</option>
+                      <option value="intermediate">Intermediate</option>
+                      <option value="advanced">Advanced</option>
                     </select>
                   </div>
 
                   <div className="input-group">
-                    <label className="input-label">Min Target Age</label>
+                    <label className="input-label">Min Age</label>
                     <input
                       type="number"
                       className="form-control"
+                      min={3}
+                      max={12}
                       value={minAge}
                       onChange={(e) => setMinAge(Number(e.target.value))}
-                      min={3}
-                      max={12}
                     />
                   </div>
 
                   <div className="input-group">
-                    <label className="input-label">Max Target Age</label>
+                    <label className="input-label">Max Age</label>
                     <input
                       type="number"
                       className="form-control"
-                      value={maxAge}
-                      onChange={(e) => setMaxAge(Number(e.target.value))}
                       min={3}
                       max={12}
+                      value={maxAge}
+                      onChange={(e) => setMaxAge(Number(e.target.value))}
                     />
                   </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Hints Enabled</label>
-                    <select
-                      className="form-select"
-                      value={String(hintsEnabled)}
-                      onChange={(e) => setHintsEnabled(e.target.value === 'true')}
-                    >
-                      <option value="true">Enabled</option>
-                      <option value="false">Disabled</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Audio Narration</label>
-                    <select
-                      className="form-select"
-                      value={String(audioNarration)}
-                      onChange={(e) => setAudioNarration(e.target.value === 'true')}
-                    >
-                      <option value="true">Enabled</option>
-                      <option value="false">Disabled</option>
-                    </select>
-                  </div>
                 </div>
-              </div>
 
-              {/* Learning Category */}
-              <div className="input-group">
-                <label className="input-label">Learning Topic / Category</label>
-                <select
-                  className="form-select"
-                  value={categoryId}
-                  onChange={(e) => setCategoryId(e.target.value)}
-                >
-                  <option value="">Select category...</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
+                <div style={{ display: 'flex', gap: '1.5rem', marginTop: '1rem' }}>
+                  <label style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={hintsEnabled}
+                      onChange={(e) => setHintsEnabled(e.target.checked)}
+                    /> Enable Hints
+                  </label>
 
-              {/* Home Explorer Subcategory */}
-              <div className="input-group">
-                <label className="input-label">Home Explorer Subcategory</label>
-                <select
-                  className="form-select"
-                  value={subcategoryId}
-                  onChange={(e) => setSubcategoryId(e.target.value)}
-                >
-                  <option value="">None</option>
-                  {subcategories.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
+                  <label style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={audioNarration}
+                      onChange={(e) => setAudioNarration(e.target.checked)}
+                    /> Audio Narration
+                  </label>
+                </div>
               </div>
 
               {/* Description */}
               <div className="input-group">
-                <label className="input-label">Description</label>
+                <label className="input-label">Description / Learning Objective</label>
                 <textarea
-                  className="form-textarea"
-                  placeholder="Optional game overview or summary..."
+                  className="form-control"
+                  rows={2}
+                  placeholder="Brief description for educators and parents..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                 />
               </div>
 
-              {/* Sort Order & Status */}
+              {/* Sort Order & Publish Status */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div className="input-group">
                   <label className="input-label">Sort Order</label>
@@ -876,14 +964,14 @@ export const GamesStudioPage: React.FC = () => {
                 </div>
 
                 <div className="input-group">
-                  <label className="input-label">Publication Status</label>
+                  <label className="input-label">Status</label>
                   <select
                     className="form-select"
                     value={String(isPublished)}
                     onChange={(e) => setIsPublished(e.target.value === 'true')}
                   >
-                    <option value="false">Draft (Hidden from apps)</option>
-                    <option value="true">Published (Live in apps)</option>
+                    <option value="false">Draft (Unpublished)</option>
+                    <option value="true">Published (Live in App)</option>
                   </select>
                 </div>
               </div>
@@ -898,7 +986,7 @@ export const GamesStudioPage: React.FC = () => {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={submitting}>
-                  {submitting ? 'Saving...' : 'Save Game'}
+                  {submitting ? 'Saving...' : 'Save Learning Game'}
                 </button>
               </div>
             </div>
@@ -911,121 +999,102 @@ export const GamesStudioPage: React.FC = () => {
         <Modal
           isOpen={Boolean(previewGame)}
           onClose={() => setPreviewGame(null)}
-          title={`Game Activity Preview & Publication Status: ${previewGame.name}`}
-          maxWidth="720px"
+          title={`Publishing Preview & Validator: ${previewGame.name}`}
+          maxWidth="700px"
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <span className="badge badge-primary">
-                {GAME_TEMPLATES.find((t) => t.value === previewGame.game_type)?.label || previewGame.game_type}
-              </span>
-              <span className={`badge ${previewGame.is_published ? 'badge-success' : 'badge-warning'}`}>
-                {previewGame.is_published ? 'Published' : 'Draft'}
-              </span>
+            <div style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
+              Validating activity structure, engine config rules, published questions, correct answer keys, and referenced media assets before generating official release snapshot.
             </div>
 
-            {/* Publication Validation Summary */}
             {validationReport && (
               <div
                 style={{
-                  padding: '1rem',
+                  backgroundColor: validationReport.eligible ? 'var(--color-success-soft)' : 'var(--color-danger-soft)',
+                  border: `1px solid ${validationReport.eligible ? 'var(--color-success)' : 'var(--color-danger)'}`,
                   borderRadius: 'var(--radius-md)',
-                  backgroundColor: validationReport.eligible ? 'var(--color-success-soft)' : 'var(--color-warning-soft)',
-                  border: `1px solid ${validationReport.eligible ? 'var(--color-success)' : 'var(--color-warning)'}`,
+                  padding: '1rem',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-                  {validationReport.eligible ? (
-                    <>
-                      <CheckCircle color="var(--color-success)" size={20} />
-                      <span style={{ color: 'var(--color-success)' }}>Eligible for Mobile Release Publishing</span>
-                    </>
-                  ) : (
-                    <>
-                      <AlertTriangle color="var(--color-warning)" size={20} />
-                      <span style={{ color: 'var(--color-warning)' }}>Publication Requirements Not Met</span>
-                    </>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: validationReport.eligible ? 'var(--color-success)' : 'var(--color-danger)', marginBottom: '0.5rem' }}>
+                  {validationReport.eligible ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                  {validationReport.eligible ? 'Activity Eligible for Publication' : 'Publication Blocked by Validation Errors'}
                 </div>
 
                 {validationReport.errors.length > 0 && (
-                  <ul style={{ margin: '0.5rem 0 0 1.25rem', fontSize: '0.8125rem', color: 'var(--color-danger)' }}>
-                    {validationReport.errors.map((err, idx) => (
-                      <li key={idx}>{err}</li>
-                    ))}
-                  </ul>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--color-danger)', marginBottom: '0.25rem' }}>Errors (Must fix before publishing):</div>
+                    <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-danger)' }}>
+                      {validationReport.errors.map((err, idx) => (
+                        <li key={idx}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
 
                 {validationReport.warnings.length > 0 && (
-                  <ul style={{ margin: '0.5rem 0 0 1.25rem', fontSize: '0.8125rem', color: 'var(--color-warning)' }}>
-                    {validationReport.warnings.map((warn, idx) => (
-                      <li key={idx}>{warn}</li>
-                    ))}
-                  </ul>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--color-warning)', marginBottom: '0.25rem' }}>Warnings (Recommended improvements):</div>
+                    <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.8125rem', color: 'var(--color-warning)' }}>
+                      {validationReport.warnings.map((warn, idx) => (
+                        <li key={idx}>{warn}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             )}
 
-            {/* Offline Release Pack Snapshot Download & Supabase Publishing */}
+            {publishSuccessMsg && (
+              <div style={{ backgroundColor: 'var(--color-success-soft)', color: 'var(--color-success)', padding: '0.875rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', fontWeight: 600 }}>
+                {publishSuccessMsg}
+              </div>
+            )}
+
+            {publishErrorMsg && (
+              <div style={{ backgroundColor: 'var(--color-danger-soft)', color: 'var(--color-danger)', padding: '0.875rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', fontWeight: 600 }}>
+                {publishErrorMsg}
+              </div>
+            )}
+
             {validationReport?.snapshot && (
-              <div style={{ backgroundColor: 'var(--color-surface-muted)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                  <h4 style={{ fontSize: '0.875rem', fontWeight: 700, margin: 0 }}>Offline Content Release Pack</h4>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(validationReport.snapshot, null, 2));
-                        const downloadAnchor = document.createElement('a');
-                        downloadAnchor.setAttribute('href', dataStr);
-                        downloadAnchor.setAttribute('download', `${previewGame.slug}-release-${validationReport.snapshot?.pack_version}.json`);
-                        document.body.appendChild(downloadAnchor);
-                        downloadAnchor.click();
-                        downloadAnchor.remove();
-                      }}
-                      className="btn btn-secondary btn-sm"
-                    >
-                      <Download size={14} /> Export Pack JSON
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handlePublishToSupabase}
-                      className="btn btn-primary btn-sm"
-                      disabled={publishingToSupabase || !validationReport.eligible}
-                    >
-                      {publishingToSupabase ? 'Publishing...' : 'Publish to Supabase'}
-                    </button>
-                  </div>
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  Version: {validationReport.snapshot.pack_version} | Questions: {validationReport.snapshot.questions.length} | Assets: {validationReport.snapshot.referenced_assets.length}
-                </div>
-
-                {publishSuccessMsg && (
-                  <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', backgroundColor: 'var(--color-success-soft)', color: 'var(--color-success)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', fontWeight: 600 }}>
-                    {publishSuccessMsg}
-                  </div>
-                )}
-
-                {publishErrorMsg && (
-                  <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', backgroundColor: 'var(--color-danger-soft)', color: 'var(--color-danger)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', fontWeight: 600 }}>
-                    {publishErrorMsg}
-                  </div>
-                )}
+              <div className="input-group">
+                <label className="input-label">Generated Release Pack Snapshot (JSON)</label>
+                <pre
+                  style={{
+                    backgroundColor: 'var(--color-surface-muted)',
+                    padding: '0.75rem',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: '0.75rem',
+                    maxHeight: '180px',
+                    overflowY: 'auto',
+                    margin: 0,
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
+                  {JSON.stringify(validationReport.snapshot, null, 2)}
+                </pre>
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
               <button
-                onClick={() => {
-                  const gId = previewGame.id;
-                  setPreviewGame(null);
-                  navigate(`/games/${gId}/questions`);
-                }}
-                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={() => setPreviewGame(null)}
+                className="btn btn-secondary"
               >
-                <HelpCircle size={14} /> Open Question Manager
+                Close
               </button>
+              {validationReport?.eligible && (
+                <button
+                  type="button"
+                  onClick={handlePublishToSupabase}
+                  className="btn btn-primary"
+                  disabled={publishingToSupabase}
+                >
+                  <Upload size={16} /> {publishingToSupabase ? 'Publishing Release...' : 'Publish Release to Supabase'}
+                </button>
+              )}
             </div>
           </div>
         </Modal>
@@ -1040,7 +1109,7 @@ export const GamesStudioPage: React.FC = () => {
         >
           <div>
             <p style={{ marginBottom: '1.5rem', lineHeight: 1.5 }}>
-              Are you sure you want to delete game <strong>{deleteConfirmGame.name}</strong>? All associated questions and options will be permanently removed.
+              Are you sure you want to delete game <strong>{deleteConfirmGame.name}</strong>?
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setDeleteConfirmGame(null)} className="btn btn-secondary">
