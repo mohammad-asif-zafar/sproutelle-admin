@@ -66,6 +66,7 @@ export interface GameLevel {
 export interface Question {
   id: string;
   game_id: string;
+  subcategory_id?: string | null;
   level_id?: string | null;
   question_text: string;
   question_type: string;

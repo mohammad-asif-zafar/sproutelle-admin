@@ -7,11 +7,11 @@ import {
   Trash2,
   Edit2,
   Copy,
-  HelpCircle,
   Eye,
   CheckCircle2,
   AlertCircle,
   Upload,
+  FolderTree,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Game, GameCategory, HomescreenExplorerSubcategory, Question, MediaAsset } from '../types/database';
@@ -643,7 +643,7 @@ export const GamesStudioPage: React.FC = () => {
                   <th style={{ padding: '0.875rem 1rem' }}>Engine Template</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Topic Category</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Subcategories</th>
-                  <th style={{ padding: '0.875rem 1rem' }}>Questions</th>
+                  <th style={{ padding: '0.875rem 1rem' }}>Questions (Total)</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Status</th>
                   <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -691,18 +691,11 @@ export const GamesStudioPage: React.FC = () => {
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
                           <button
-                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { openAddModal: true, origin: 'games_catalog' } })}
-                            className="btn btn-primary btn-sm"
-                            title="Add Question"
-                          >
-                            <Plus size={14} /> Add Question
-                          </button>
-                          <button
-                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { origin: 'games_catalog' } })}
+                            onClick={() => navigate('/explorer')}
                             className="btn btn-secondary btn-sm"
-                            title="View Questions"
+                            title="Manage questions in Subcategory via Explorer Studio"
                           >
-                            <HelpCircle size={14} /> View Questions
+                            <FolderTree size={14} /> Manage in Subcategory
                           </button>
                           <button
                             onClick={() => openPreviewAndPublicationValidator(game)}

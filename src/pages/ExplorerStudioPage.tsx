@@ -184,18 +184,22 @@ export const ExplorerStudioPage: React.FC = () => {
           .select('game:games(*, category:game_categories(*))')
           .eq('subcategory_id', subId)
           .order('sort_order', { ascending: true }),
-        supabase.from('questions').select('game_id'),
+        supabase.from('questions').select('game_id, subcategory_id').eq('subcategory_id', subId),
       ]);
 
       if (assignRes.error) throw assignRes.error;
       const gamesList = (assignRes.data || []).map((item: unknown) => (item as { game: Game }).game).filter(Boolean);
       setSubcategoryGames(gamesList);
 
-      if (qRes.data) {
+      if (qRes.error) {
+        console.error('Failed loading subcategory question counts:', qRes.error.message);
+        setGameQuestionCountMap(new Map());
+      } else if (qRes.data) {
         const qMap = new Map<string, number>();
         ((qRes.data as Array<Record<string, unknown>>) || []).forEach((q) => {
           const gId = q.game_id as string;
-          if (gId) {
+          const sId = q.subcategory_id as string;
+          if (gId && sId === subId) {
             qMap.set(gId, (qMap.get(gId) || 0) + 1);
           }
         });

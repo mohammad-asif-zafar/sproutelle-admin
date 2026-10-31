@@ -92,27 +92,25 @@ export const GameQuestionsPage: React.FC = () => {
     async function loadGameAndQuestions() {
       try {
         setGameError(null);
-        const [gameRes, qRes] = await Promise.all([
-          supabase.from('games').select('*').eq('id', gameId).maybeSingle(),
-          supabase
-            .from('questions')
-            .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
-            .eq('game_id', gameId)
-            .order('sort_order', { ascending: true }),
-        ]);
+        setQuestions([]);
+        setLoading(true);
 
+        const subcategoryId = state?.fromSubcategory;
+        const explorerId = state?.explorerId;
+        if (!gameId || !subcategoryId || !explorerId) {
+          if (isMounted) {
+            setGameError('Relationship Error: Missing required navigation context (gameId, subcategory, or explorer).');
+            setLoading(false);
+          }
+          return;
+        }
+
+        const gameRes = await supabase.from('games').select('*').eq('id', gameId).maybeSingle();
         if (!isMounted) return;
 
         if (gameRes.error || !gameRes.data) {
           setGameError(`Game with ID "${gameId}" could not be found.`);
           setGame(null);
-          setLoading(false);
-          return;
-        }
-
-        if (qRes.error) {
-          setGameError(`Failed to load questions: ${qRes.error.message}`);
-          setQuestions([]);
           setLoading(false);
           return;
         }
@@ -125,58 +123,44 @@ export const GameQuestionsPage: React.FC = () => {
         setSubcategoryInfo(null);
         setExplorerInfo(null);
 
-        // Resolve Explorer & Subcategory hierarchy strictly via canonical subcategory_games junction table
-        try {
-          const { data: assignList, error: assignErr } = await supabase
-            .from('subcategory_games')
-            .select('subcategory:homescreen_explorer_subcategories(*, explorer:homescreen_explorer(*))')
-            .eq('game_id', gameData.id);
+        const { data: assignMatch, error: assignErr } = await supabase
+          .from('subcategory_games')
+          .select('subcategory:homescreen_explorer_subcategories(*, explorer:homescreen_explorer(*))')
+          .eq('game_id', gameData.id)
+          .eq('subcategory_id', subcategoryId)
+          .maybeSingle();
 
-          if (assignErr) {
-            console.error('Hierarchy query error:', assignErr.message);
-            if (isMounted) {
-              setGameError(`Relationship Error: Failed to load subcategory assignments (${assignErr.message}).`);
-            }
-          } else if (assignList && assignList.length > 0) {
-            if (state?.fromSubcategory && state?.explorerId) {
-              const exactMatch = assignList.find(
-                (a: unknown) =>
-                  (a as { subcategory?: { id?: string; explorer?: { id?: string } } }).subcategory?.id === state.fromSubcategory &&
-                  (a as { subcategory?: { id?: string; explorer?: { id?: string } } }).subcategory?.explorer?.id === state.explorerId
-              );
-              if (exactMatch) {
-                const subRecord = (exactMatch as unknown as { subcategory?: HomescreenExplorerSubcategory & { explorer?: HomescreenExplorer } }).subcategory;
-                if (subRecord && isMounted) {
-                  setSubcategoryInfo(subRecord);
-                  if (subRecord.explorer) {
-                    setExplorerInfo(subRecord.explorer);
-                  }
-                }
-              } else if (isMounted) {
-                setGameError('Relationship Error: Provided navigation context does not match actual subcategory assignment for this game.');
-              }
-            } else {
-              if (assignList.length === 1) {
-                const subRecord = (assignList[0] as unknown as { subcategory?: HomescreenExplorerSubcategory & { explorer?: HomescreenExplorer } }).subcategory;
-                if (subRecord && isMounted) {
-                  setSubcategoryInfo(subRecord);
-                  if (subRecord.explorer) {
-                    setExplorerInfo(subRecord.explorer);
-                  }
-                }
-              } else {
-                if (isMounted) {
-                  setGameError('Relationship Notice: This game belongs to multiple subcategories. Please navigate to Questions from a specific subcategory view.');
-                }
-              }
-            }
-          } else if (isMounted) {
-            setGameError('Relationship Error: This game is not assigned to any Explorer Subcategory via the canonical junction table (subcategory_games).');
-          }
-        } catch (hierErr) {
-          console.error('Hierarchy resolution exception:', hierErr);
-          const msg = hierErr instanceof Error ? hierErr.message : 'Hierarchy check failed.';
-          if (isMounted) setGameError(`Hierarchy Error: ${msg}`);
+        if (!isMounted) return;
+
+        if (assignErr || !assignMatch) {
+          setGameError('Relationship Error: This game is not assigned to the selected Subcategory via the canonical junction table (subcategory_games).');
+          setLoading(false);
+          return;
+        }
+
+        const subRecord = (assignMatch as unknown as { subcategory?: HomescreenExplorerSubcategory & { explorer?: HomescreenExplorer } }).subcategory;
+        if (!subRecord || !subRecord.explorer || subRecord.explorer_id !== explorerId) {
+          setGameError('Relationship Error: Provided Explorer ID does not match the parent Explorer of the selected Subcategory.');
+          setLoading(false);
+          return;
+        }
+        setSubcategoryInfo(subRecord);
+        setExplorerInfo(subRecord.explorer);
+
+        const qRes = await supabase
+          .from('questions')
+          .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+          .eq('game_id', gameData.id)
+          .eq('subcategory_id', subcategoryId)
+          .order('sort_order', { ascending: true });
+
+        if (!isMounted) return;
+
+        if (qRes.error) {
+          setGameError(`Failed to load questions: ${qRes.error.message}`);
+          setQuestions([]);
+          setLoading(false);
+          return;
         }
 
         const loadedQuestions = (qRes.data as Question[]) || [];
@@ -392,6 +376,13 @@ export const GameQuestionsPage: React.FC = () => {
       return;
     }
 
+    const subcategoryId = state?.fromSubcategory;
+    const explorerId = state?.explorerId;
+    if (!gameId || !subcategoryId || !explorerId || !game || !subcategoryInfo || subcategoryInfo.explorer_id !== explorerId) {
+      setFormError('Missing or invalid required navigation context (gameId, subcategory, or explorer).');
+      return;
+    }
+
     if (!isSupabaseConfigured) {
       alert('Supabase is not configured.');
       return;
@@ -401,6 +392,7 @@ export const GameQuestionsPage: React.FC = () => {
       setSubmitting(true);
       const questionPayload = {
         game_id: gameId,
+        subcategory_id: subcategoryId,
         question_text: questionText.trim(),
         question_type: questionType,
         instructions: instructions.trim() || null,
@@ -414,9 +406,21 @@ export const GameQuestionsPage: React.FC = () => {
       let qId = editingQuestion?.id;
 
       if (editingQuestion) {
-        const { error } = await supabase.from('questions').update(questionPayload).eq('id', qId).eq('game_id', gameId);
+        const { data: updateData, error } = await supabase
+          .from('questions')
+          .update(questionPayload)
+          .eq('id', qId)
+          .eq('game_id', gameId)
+          .eq('subcategory_id', subcategoryId)
+          .select();
         if (error) throw error;
-        await supabase.from('question_options').delete().eq('question_id', qId);
+        if (!updateData || updateData.length === 0) {
+          throw new Error('Question update failed: question record matching requested IDs was not found.');
+        }
+        const { error: delOptErr } = await supabase.from('question_options').delete().eq('question_id', qId);
+        if (delOptErr) {
+          throw new Error(`Failed deleting existing options during update: ${delOptErr.message}`);
+        }
       } else {
         const { data: insertedQ, error } = await supabase.from('questions').insert(questionPayload).select().single();
         if (error) throw error;
@@ -434,7 +438,7 @@ export const GameQuestionsPage: React.FC = () => {
       const { error: optError } = await supabase.from('question_options').insert(optionRows);
       if (optError) {
         if (!editingQuestion && qId) {
-          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId);
+          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId).eq('subcategory_id', subcategoryId);
         }
         throw optError;
       }
@@ -444,6 +448,7 @@ export const GameQuestionsPage: React.FC = () => {
         .from('questions')
         .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
         .eq('game_id', gameId)
+        .eq('subcategory_id', subcategoryId)
         .order('sort_order', { ascending: true });
       if (qRes) setQuestions(qRes as Question[]);
 
@@ -471,6 +476,13 @@ export const GameQuestionsPage: React.FC = () => {
       return;
     }
 
+    const subcategoryId = state?.fromSubcategory;
+    const explorerId = state?.explorerId;
+    if (!gameId || !subcategoryId || !explorerId || !game || !subcategoryInfo || subcategoryInfo.explorer_id !== explorerId) {
+      setFormError('Missing or invalid required navigation context (gameId, subcategory, or explorer).');
+      return;
+    }
+
     if (!isSupabaseConfigured) {
       alert('Supabase is not configured.');
       return;
@@ -480,6 +492,7 @@ export const GameQuestionsPage: React.FC = () => {
       setSubmitting(true);
       const questionPayload = {
         game_id: gameId,
+        subcategory_id: subcategoryId,
         question_text: questionText.trim(),
         question_type: questionType,
         instructions: instructions.trim() || null,
@@ -505,7 +518,7 @@ export const GameQuestionsPage: React.FC = () => {
       const { error: optError } = await supabase.from('question_options').insert(optionRows);
       if (optError) {
         if (qId) {
-          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId);
+          await supabase.from('questions').delete().eq('id', qId).eq('game_id', gameId).eq('subcategory_id', subcategoryId);
         }
         throw optError;
       }
@@ -515,6 +528,7 @@ export const GameQuestionsPage: React.FC = () => {
         .from('questions')
         .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
         .eq('game_id', gameId)
+        .eq('subcategory_id', subcategoryId)
         .order('sort_order', { ascending: true });
       if (qRes) {
         const loaded = qRes as Question[];
@@ -542,27 +556,50 @@ export const GameQuestionsPage: React.FC = () => {
   };
 
   const handleDelete = async () => {
-    if (!deleteConfirmQuestion || !gameId) return;
+    if (!deleteConfirmQuestion) return;
+
+    const subcategoryId = state?.fromSubcategory;
+    const explorerId = state?.explorerId;
+    if (!gameId || !subcategoryId || !explorerId || !subcategoryInfo || subcategoryInfo.explorer_id !== explorerId) {
+      setFormError('Missing or invalid required navigation context (gameId, subcategory, or explorer).');
+      setDeleteConfirmQuestion(null);
+      return;
+    }
+
     if (!isSupabaseConfigured) {
       alert('Supabase is not configured.');
       return;
     }
 
     try {
-      const { error } = await supabase.from('questions').delete().eq('id', deleteConfirmQuestion.id).eq('game_id', gameId);
+      setSubmitting(true);
+      const { error } = await supabase
+        .from('questions')
+        .delete()
+        .eq('id', deleteConfirmQuestion.id)
+        .eq('game_id', gameId)
+        .eq('subcategory_id', subcategoryId);
+
       if (error) throw error;
 
-      const { data: qRes } = await supabase
+      const { data: qRes, error: qErr } = await supabase
         .from('questions')
         .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
         .eq('game_id', gameId)
+        .eq('subcategory_id', subcategoryId)
         .order('sort_order', { ascending: true });
+
+      if (qErr) throw qErr;
       if (qRes) setQuestions(qRes as Question[]);
 
       setDeleteConfirmQuestion(null);
     } catch (err) {
       console.error('Failed deleting question securely:', err);
-      alert('Failed to delete question securely.');
+      const msg = err instanceof Error ? err.message : 'Database delete failed.';
+      setFormError(msg);
+      setDeleteConfirmQuestion(null);
+    } finally {
+      setSubmitting(false);
     }
   };
 
