@@ -183,6 +183,7 @@ export const ExplorerStudioPage: React.FC = () => {
           .from('subcategory_games')
           .select('game:games(*, category:game_categories(*))')
           .eq('subcategory_id', subId)
+          .eq('is_active', true)
           .order('sort_order', { ascending: true }),
         supabase.from('questions').select('game_id, subcategory_id').eq('subcategory_id', subId),
       ]);
@@ -230,6 +231,7 @@ export const ExplorerStudioPage: React.FC = () => {
         game_id: gId,
         sort_order: subcategoryGames.length + idx + 1,
         is_active: true,
+        updated_at: new Date().toISOString(),
       }));
 
       const { error } = await supabase.from('subcategory_games').upsert(rows, { onConflict: 'subcategory_id,game_id' });
@@ -536,7 +538,7 @@ export const ExplorerStudioPage: React.FC = () => {
           .select('*, image_asset:media_assets(*), category:game_categories(*)')
           .eq('explorer_id', explorerId)
           .order('sort_order', { ascending: true }),
-        supabase.from('subcategory_games').select('subcategory_id, game_id'),
+        supabase.from('subcategory_games').select('subcategory_id, game_id').eq('is_active', true),
       ]);
 
       if (subRes.error) throw subRes.error;
@@ -1032,9 +1034,19 @@ export const ExplorerStudioPage: React.FC = () => {
                             <button
                               onClick={async () => {
                                 if (confirm(`Remove game "${game.name}" from subcategory "${managingSubcategory.name}"?`)) {
-                                  await supabase.from('subcategory_games').delete().eq('subcategory_id', managingSubcategory.id).eq('game_id', game.id);
-                                  await loadSubcategoryGames(managingSubcategory.id);
-                                  await loadSubcategories(managingExplorer.id);
+                                  try {
+                                    const { error } = await supabase
+                                      .from('subcategory_games')
+                                      .update({ is_active: false, updated_at: new Date().toISOString() })
+                                      .eq('subcategory_id', managingSubcategory.id)
+                                      .eq('game_id', game.id);
+                                    if (error) throw error;
+                                    await loadSubcategoryGames(managingSubcategory.id);
+                                    await loadSubcategories(managingExplorer.id);
+                                  } catch (err) {
+                                    console.error('Failed deactivating game assignment:', err);
+                                    alert('Failed to remove game assignment.');
+                                  }
                                 }
                               }}
                               className="btn btn-danger btn-sm"

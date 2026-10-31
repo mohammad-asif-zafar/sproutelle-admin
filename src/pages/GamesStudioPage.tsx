@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Gamepad2,
   Plus,
@@ -11,22 +10,17 @@ import {
   CheckCircle2,
   AlertCircle,
   Upload,
-  FolderTree,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { Game, GameCategory, HomescreenExplorerSubcategory, Question, MediaAsset } from '../types/database';
+import type { Game, GameCategory, Question, MediaAsset } from '../types/database';
 import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { validateActivityForPublication, type ValidationReport } from '../lib/publisher';
 import { Modal } from '../components/Common/Modal';
 
 export const GamesStudioPage: React.FC = () => {
-  const navigate = useNavigate();
-
   const [gamesList, setGamesList] = useState<Game[]>([]);
   const [categories, setCategories] = useState<GameCategory[]>([]);
-  const [subcategories, setSubcategories] = useState<HomescreenExplorerSubcategory[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
-  const [gameSubcategoryMap, setGameSubcategoryMap] = useState<Map<string, string[]>>(new Map());
   const [gameQuestionCountMap, setGameQuestionCountMap] = useState<Map<string, number>>(new Map());
   const [gameQuestionCountError, setGameQuestionCountError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
@@ -58,7 +52,6 @@ export const GamesStudioPage: React.FC = () => {
   const [gameName, setGameName] = useState<string>('');
   const [gameSlug, setGameSlug] = useState<string>('');
   const [categoryId, setCategoryId] = useState<string>('');
-  const [selectedSubcategoryIds, setSelectedSubcategoryIds] = useState<string[]>([]);
   const [gameType, setGameType] = useState<string>('multiple_choice');
   const [description, setDescription] = useState<string>('');
   const [isPublished, setIsPublished] = useState<boolean>(false);
@@ -85,23 +78,19 @@ export const GamesStudioPage: React.FC = () => {
     try {
       setPageError(null);
 
-      const [gamesRes, catRes, subRes, mediaRes, assignRes, qRes] = await Promise.all([
+      const [gamesRes, catRes, mediaRes, qRes] = await Promise.all([
         supabase
           .from('games')
           .select('*, category:game_categories(*)')
           .order('sort_order', { ascending: true }),
         supabase.from('game_categories').select('*').order('sort_order'),
-        supabase.from('homescreen_explorer_subcategories').select('*').order('sort_order'),
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
-        supabase.from('subcategory_games').select('*'),
         supabase.from('questions').select('game_id'),
       ]);
 
       if (gamesRes.error) throw gamesRes.error;
       if (catRes.error) throw catRes.error;
-      if (subRes.error) throw subRes.error;
       if (mediaRes.error) throw mediaRes.error;
-      if (assignRes.error) throw assignRes.error;
 
       if (qRes.error) {
         setGameQuestionCountError(qRes.error.message);
@@ -117,30 +106,8 @@ export const GamesStudioPage: React.FC = () => {
         setGameQuestionCountMap(qMap);
       }
 
-      const subList = (subRes.data as HomescreenExplorerSubcategory[]) || [];
-      const assignList = (assignRes.data as Array<{ game_id: string; subcategory_id: string }>) || [];
-      const gameSubMap = new Map<string, string[]>();
-      assignList.forEach((a) => {
-        const list = gameSubMap.get(a.game_id) || [];
-        list.push(a.subcategory_id);
-        gameSubMap.set(a.game_id, list);
-      });
-      setGameSubcategoryMap(gameSubMap);
-
-      const enrichedGames = (gamesRes.data as Game[]).map((g) => {
-        const subIds = gameSubMap.get(g.id) || [];
-        const primarySubId = subIds.length > 0 ? subIds[0] : null;
-        const subObj = primarySubId ? subList.find((s) => s.id === primarySubId) || null : null;
-        return {
-          ...g,
-          subcategory_id: primarySubId,
-          subcategory: subObj,
-        };
-      });
-      setGamesList(enrichedGames);
-
+      setGamesList((gamesRes.data as Game[]) || []);
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
-      if (subRes.data) setSubcategories(subRes.data as HomescreenExplorerSubcategory[]);
       if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
     } catch (err) {
       console.error('Failed loading games data:', err);
@@ -157,15 +124,13 @@ export const GamesStudioPage: React.FC = () => {
 
     async function init() {
       try {
-        const [gamesRes, catRes, subRes, mediaRes, assignRes, qRes] = await Promise.all([
+        const [gamesRes, catRes, mediaRes, qRes] = await Promise.all([
           supabase
             .from('games')
             .select('*, category:game_categories(*)')
             .order('sort_order', { ascending: true }),
           supabase.from('game_categories').select('*').order('sort_order'),
-          supabase.from('homescreen_explorer_subcategories').select('*').order('sort_order'),
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
-          supabase.from('subcategory_games').select('*'),
           supabase.from('questions').select('game_id'),
         ]);
 
@@ -173,9 +138,7 @@ export const GamesStudioPage: React.FC = () => {
 
         if (gamesRes.error) throw gamesRes.error;
         if (catRes.error) throw catRes.error;
-        if (subRes.error) throw subRes.error;
         if (mediaRes.error) throw mediaRes.error;
-        if (assignRes.error) throw assignRes.error;
 
         if (qRes.error) {
           setGameQuestionCountError(qRes.error.message);
@@ -191,30 +154,9 @@ export const GamesStudioPage: React.FC = () => {
           setGameQuestionCountMap(qMap);
         }
 
-        const subList = (subRes.data as HomescreenExplorerSubcategory[]) || [];
-        const assignList = (assignRes.data as Array<{ game_id: string; subcategory_id: string }>) || [];
-        const gameSubMap = new Map<string, string[]>();
-        assignList.forEach((a) => {
-          const list = gameSubMap.get(a.game_id) || [];
-          list.push(a.subcategory_id);
-          gameSubMap.set(a.game_id, list);
-        });
-        setGameSubcategoryMap(gameSubMap);
-
-        const enrichedGames = (gamesRes.data as Game[]).map((g) => {
-          const subIds = gameSubMap.get(g.id) || [];
-          const primarySubId = subIds.length > 0 ? subIds[0] : null;
-          const subObj = primarySubId ? subList.find((s) => s.id === primarySubId) || null : null;
-          return {
-            ...g,
-            subcategory_id: primarySubId,
-            subcategory: subObj,
-          };
-        });
-        setGamesList(enrichedGames);
-
+        if (!isMounted) return;
+        setGamesList((gamesRes.data as Game[]) || []);
         if (catRes.data) setCategories(catRes.data as GameCategory[]);
-        if (subRes.data) setSubcategories(subRes.data as HomescreenExplorerSubcategory[]);
         if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
       } catch (err) {
         console.error('Failed loading games data:', err);
@@ -237,7 +179,6 @@ export const GamesStudioPage: React.FC = () => {
     setGameName('');
     setGameSlug('');
     setCategoryId(categories[0]?.id || '');
-    setSelectedSubcategoryIds([]);
     setGameType('multiple_choice');
     setQuestionCount(5);
     setDifficulty('beginner');
@@ -252,29 +193,12 @@ export const GamesStudioPage: React.FC = () => {
     setModalOpen(true);
   };
 
-  const openEditModal = async (game: Game) => {
+  const openEditModal = (game: Game) => {
     setEditingGame(game);
     setGameName(game.name);
     setGameSlug(game.slug);
     setCategoryId(game.category_id || '');
     setGameType(game.game_type || 'multiple_choice');
-
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('subcategory_games')
-          .select('subcategory_id')
-          .eq('game_id', game.id);
-        if (error) throw error;
-        setSelectedSubcategoryIds((data || []).map((d) => d.subcategory_id));
-      } catch (err) {
-        console.error('Failed loading subcategory assignments for edit:', err);
-        alert('Failed loading existing subcategory assignments. Cannot open edit form safely.');
-        return;
-      }
-    } else {
-      setSelectedSubcategoryIds([]);
-    }
 
     const cfg = game.config || {};
     setQuestionCount(Number(cfg.question_count || 5));
@@ -344,48 +268,18 @@ export const GamesStudioPage: React.FC = () => {
 
     try {
       setSubmitting(true);
-      let gameId = editingGame?.id;
       if (editingGame) {
-        const { error } = await supabase.from('games').update(payload).eq('id', gameId);
+        const { error } = await supabase.from('games').update(payload).eq('id', editingGame.id);
         if (error) throw error;
       } else {
-        const { data: insertedGame, error } = await supabase.from('games').insert(payload).select().single();
+        const { error } = await supabase.from('games').insert(payload);
         if (error) throw error;
-        gameId = insertedGame.id;
-      }
-
-      // Safe non-atomic junction sync with error checking and rollback restoration
-      if (gameId) {
-        const { data: oldAssign, error: queryErr } = await supabase.from('subcategory_games').select('*').eq('game_id', gameId);
-        if (queryErr) throw queryErr;
-
-        const { error: delErr } = await supabase.from('subcategory_games').delete().eq('game_id', gameId);
-        if (delErr) throw delErr;
-
-        if (selectedSubcategoryIds.length > 0) {
-          const rows = selectedSubcategoryIds.map((subId) => ({
-            subcategory_id: subId,
-            game_id: gameId,
-            sort_order: 1,
-            is_active: true,
-          }));
-          const { error: insErr } = await supabase.from('subcategory_games').insert(rows);
-          if (insErr) {
-            if (oldAssign && oldAssign.length > 0) {
-              const { error: rbErr } = await supabase.from('subcategory_games').insert(oldAssign);
-              if (rbErr) {
-                throw new Error(`Assignment insertion failed (${insErr.message}), and rollback restoration also failed (${rbErr.message}).`);
-              }
-            }
-            throw insErr;
-          }
-        }
       }
 
       await loadData();
       setModalOpen(false);
     } catch (err) {
-      console.error('Failed saving game:', err);
+      console.error('Failed saving game definition:', err);
       const msg = err instanceof Error ? err.message : 'Database save failed.';
       setFormError(msg);
     } finally {
@@ -406,52 +300,18 @@ export const GamesStudioPage: React.FC = () => {
       game_type: game.game_type,
       config: game.config || {},
       description: game.description,
-      is_published: false, // Ensure duplicate is created unpublished
+      is_published: false,
       sort_order: gamesList.length + 1,
       updated_at: new Date().toISOString(),
     };
 
-    let insertedGameId: string | null = null;
     try {
-      const { data: insertedGame, error } = await supabase.from('games').insert(clonedPayload).select().single();
+      const { error } = await supabase.from('games').insert(clonedPayload);
       if (error) throw error;
-      insertedGameId = insertedGame.id;
-
-      if (insertedGame) {
-        const { data: assignData, error: assignErr } = await supabase
-          .from('subcategory_games')
-          .select('subcategory_id')
-          .eq('game_id', game.id);
-        if (assignErr) throw assignErr;
-
-        if (assignData && assignData.length > 0) {
-          const rows = assignData.map((a) => ({
-            subcategory_id: a.subcategory_id,
-            game_id: insertedGame.id,
-            sort_order: 1,
-            is_active: true,
-          }));
-          const { error: insAssignErr } = await supabase.from('subcategory_games').insert(rows);
-          if (insAssignErr) throw insAssignErr;
-        }
-      }
-
       await loadData();
     } catch (err) {
-      console.error('Failed duplicating game securely:', err);
-      if (insertedGameId) {
-        try {
-          const { error: rbErr } = await supabase.from('games').delete().eq('id', insertedGameId);
-          if (rbErr) {
-            console.error('Rollback deletion failed:', rbErr);
-            alert(`Duplication failed and automatic cleanup rollback also failed: ${rbErr.message}. Original error: ${err instanceof Error ? err.message : 'Unknown'}`);
-            return;
-          }
-        } catch (rbEx) {
-          console.error('Rollback exception:', rbEx);
-        }
-      }
-      alert('Failed to duplicate game securely. Incomplete record removed successfully.');
+      console.error('Failed duplicating game definition:', err);
+      alert('Failed to duplicate game definition.');
     }
   };
 
@@ -642,7 +502,6 @@ export const GamesStudioPage: React.FC = () => {
                   <th style={{ padding: '0.875rem 1rem' }}>Game Name</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Engine Template</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Topic Category</th>
-                  <th style={{ padding: '0.875rem 1rem' }}>Subcategories</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Questions (Total)</th>
                   <th style={{ padding: '0.875rem 1rem' }}>Status</th>
                   <th style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>Actions</th>
@@ -651,10 +510,6 @@ export const GamesStudioPage: React.FC = () => {
               <tbody>
                 {filtered.map((game) => {
                   const engineDef = GAME_ENGINE_REGISTRY[game.game_type as EngineType] || GAME_ENGINE_REGISTRY.guess_game;
-                  const assignedSubIds = gameSubcategoryMap.get(game.id) || [];
-                  const subcategoryNames = assignedSubIds.length > 0
-                    ? assignedSubIds.map((sid) => subcategories.find((s) => s.id === sid)?.name).filter(Boolean).join(', ')
-                    : 'None';
 
                   return (
                     <tr key={game.id} style={{ borderBottom: '1px solid var(--color-border-subtle)' }}>
@@ -668,9 +523,6 @@ export const GamesStudioPage: React.FC = () => {
                       </td>
                       <td style={{ padding: '0.875rem 1rem' }}>
                         {game.category?.name || categories.find((c) => c.id === game.category_id)?.name || 'None'}
-                      </td>
-                      <td style={{ padding: '0.875rem 1rem', color: 'var(--color-text-muted)' }}>
-                        {subcategoryNames}
                       </td>
                       <td style={{ padding: '0.875rem 1rem' }}>
                         {gameQuestionCountError ? (
@@ -690,13 +542,6 @@ export const GamesStudioPage: React.FC = () => {
                       </td>
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
-                          <button
-                            onClick={() => navigate('/explorer')}
-                            className="btn btn-secondary btn-sm"
-                            title="Manage questions in Subcategory via Explorer Studio"
-                          >
-                            <FolderTree size={14} /> Manage in Subcategory
-                          </button>
                           <button
                             onClick={() => openPreviewAndPublicationValidator(game)}
                             className="btn btn-secondary btn-sm"
@@ -822,38 +667,6 @@ export const GamesStudioPage: React.FC = () => {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              {/* Home Explorer Subcategories (Multi-select) */}
-              <div className="input-group">
-                <label className="input-label">Home Explorer Subcategories (Multi-select)</label>
-                <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {subcategories.length === 0 ? (
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>No subcategories configured yet.</span>
-                  ) : (
-                    subcategories.map((sub) => {
-                      const isChecked = selectedSubcategoryIds.includes(sub.id);
-                      return (
-                        <label key={sub.id} style={{ fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              setSelectedSubcategoryIds((prev) =>
-                                checked ? [...prev, sub.id] : prev.filter((id) => id !== sub.id)
-                              );
-                            }}
-                          />
-                          {sub.name}
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-                <small style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                  Assigns this game to one or more homescreen subcategories via the canonical junction table.
-                </small>
               </div>
 
               {/* Engine Configuration Section */}
