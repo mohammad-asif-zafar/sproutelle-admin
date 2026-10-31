@@ -350,6 +350,7 @@ export const ExplorerStudioPage: React.FC = () => {
                 const sub = subList.find((s) => s.id === managingSubcategoryId);
                 if (sub) {
                   setManagingSubcategory(sub);
+                  loadSubcategoryGames(sub.id);
                 }
               }
             }
@@ -440,6 +441,7 @@ export const ExplorerStudioPage: React.FC = () => {
                   const sub = subList.find((s) => s.id === managingSubcategoryId);
                   if (sub) {
                     setManagingSubcategory(sub);
+                    loadSubcategoryGames(sub.id);
                   }
                 }
               }
@@ -993,6 +995,7 @@ export const ExplorerStudioPage: React.FC = () => {
                                   fromSubcategory: managingSubcategory.id,
                                   explorerId: managingExplorer.id,
                                   openAddModal: true,
+                                  origin: 'subcategory_games',
                                 },
                               })}
                               className="btn btn-primary btn-sm"
@@ -1005,6 +1008,7 @@ export const ExplorerStudioPage: React.FC = () => {
                                 state: {
                                   fromSubcategory: managingSubcategory.id,
                                   explorerId: managingExplorer.id,
+                                  origin: 'subcategory_games',
                                 },
                               })}
                               className="btn btn-secondary btn-sm"

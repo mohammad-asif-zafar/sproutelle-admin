@@ -27,7 +27,7 @@ export const GameQuestionsPage: React.FC = () => {
   const { gameId } = useParams<{ gameId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const state = location.state as { fromSubcategory?: string; explorerId?: string; openAddModal?: boolean } | null;
+  const state = location.state as { fromSubcategory?: string; explorerId?: string; openAddModal?: boolean; origin?: string } | null;
 
   const [game, setGame] = useState<Game | null>(null);
   const [subcategoryInfo, setSubcategoryInfo] = useState<HomescreenExplorerSubcategory | null>(null);
@@ -72,7 +72,7 @@ export const GameQuestionsPage: React.FC = () => {
   const openedModalGameIdRef = useRef<string | null>(null);
 
   const handleBackNavigation = () => {
-    if (state?.fromSubcategory && state?.explorerId) {
+    if ((state?.origin === 'subcategory_games' || state?.fromSubcategory) && state?.explorerId && state?.fromSubcategory) {
       navigate('/explorer', {
         state: {
           managingExplorerId: state.explorerId,
@@ -203,6 +203,7 @@ export const GameQuestionsPage: React.FC = () => {
             state: {
               fromSubcategory: state?.fromSubcategory,
               explorerId: state?.explorerId,
+              origin: state?.origin,
             },
           });
         }

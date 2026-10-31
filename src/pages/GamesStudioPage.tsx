@@ -691,14 +691,14 @@ export const GamesStudioPage: React.FC = () => {
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>
                           <button
-                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { openAddModal: true } })}
+                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { openAddModal: true, origin: 'games_catalog' } })}
                             className="btn btn-primary btn-sm"
                             title="Add Question"
                           >
                             <Plus size={14} /> Add Question
                           </button>
                           <button
-                            onClick={() => navigate(`/games/${game.id}/questions`)}
+                            onClick={() => navigate(`/games/${game.id}/questions`, { state: { origin: 'games_catalog' } })}
                             className="btn btn-secondary btn-sm"
                             title="View Questions"
                           >
