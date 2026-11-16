@@ -15,7 +15,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Game, GameCategory, MediaAsset } from '../types/database';
 import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { validateActivityForPublication, type ValidationReport } from '../lib/publisher';
-import { parsePublicationDataQueries } from '../lib/validation/queryParser';
+import { loadPublicationData } from '../lib/validation/queryParser';
 import { Modal } from '../components/Common/Modal';
 
 export const GamesStudioPage: React.FC = () => {
@@ -55,7 +55,6 @@ export const GamesStudioPage: React.FC = () => {
   const [categoryId, setCategoryId] = useState<string>('');
   const [gameType, setGameType] = useState<string>('multiple_choice');
   const [description, setDescription] = useState<string>('');
-  const [isPublished, setIsPublished] = useState<boolean>(false);
   const [sortOrder, setSortOrder] = useState<number>(1);
 
   // Engine Config Fields
@@ -188,7 +187,6 @@ export const GamesStudioPage: React.FC = () => {
     setHintsEnabled(true);
     setAudioNarration(true);
     setDescription('');
-    setIsPublished(false);
     setSortOrder(gamesList.length + 1);
     setFormError(null);
     setModalOpen(true);
@@ -210,7 +208,6 @@ export const GamesStudioPage: React.FC = () => {
     setAudioNarration(cfg.audio_narration !== false);
 
     setDescription(game.description || '');
-    setIsPublished(game.is_published ?? false);
     setSortOrder(game.sort_order || 1);
     setFormError(null);
     setModalOpen(true);
@@ -257,7 +254,7 @@ export const GamesStudioPage: React.FC = () => {
       game_type: gameType,
       config: configPayload,
       description: description.trim() || null,
-      is_published: isPublished,
+      is_published: editingGame ? (editingGame.is_published ?? false) : false,
       sort_order: sortOrder,
       updated_at: new Date().toISOString(),
     };
@@ -321,60 +318,20 @@ export const GamesStudioPage: React.FC = () => {
     setPublishSuccessMsg(null);
     setPublishErrorMsg(null);
 
-    if (!isSupabaseConfigured) {
+    const dataResult = await loadPublicationData(game.id, isSupabaseConfigured, supabase);
+    if (!dataResult.success) {
       setValidationReport({
         eligible: false,
-        errors: ['Supabase is not configured. Cannot perform publication preview or validation.'],
+        errors: [dataResult.error || 'Publication Data Load Failure: Database query failed.'],
         warnings: [],
         snapshot: null,
       });
       return;
     }
 
-    try {
-      const [qRes, assignRes, levelsRes] = await Promise.all([
-        supabase
-          .from('questions')
-          .select('*, options:question_options(*)')
-          .eq('game_id', game.id)
-          .order('sort_order', { ascending: true }),
-        supabase
-          .from('subcategory_games')
-          .select('subcategory_id')
-          .eq('game_id', game.id)
-          .eq('is_active', true),
-        supabase
-          .from('game_levels')
-          .select('*')
-          .eq('game_id', game.id)
-          .order('level_number', { ascending: true }),
-      ]);
-
-      const parseResult = parsePublicationDataQueries(qRes, assignRes, levelsRes);
-      if (!parseResult.success) {
-        setValidationReport({
-          eligible: false,
-          errors: [parseResult.error || 'Publication Data Load Failure: Database query failed.'],
-          warnings: [],
-          snapshot: null,
-        });
-        return;
-      }
-
-      const { questions, activeSubcategoryIds, levels } = parseResult;
-      const report = validateActivityForPublication(game, questions, mediaAssets, activeSubcategoryIds, levels);
-      setValidationReport(report);
-    } catch (err) {
-      console.error('Failed loading publication data:', err);
-      const msg = err instanceof Error ? err.message : 'Database query failed.';
-      setValidationReport({
-        eligible: false,
-        errors: [`Publication Data Load Failure: Could not verify subcategory assignments or questions (${msg}).`],
-        warnings: [],
-        snapshot: null,
-      });
-      return;
-    }
+    const { questions, activeSubcategoryIds, levels } = dataResult;
+    const report = validateActivityForPublication(game, questions, mediaAssets, activeSubcategoryIds, levels);
+    setValidationReport(report);
   };
 
   const handlePublishToSupabase = async () => {
@@ -809,15 +766,15 @@ export const GamesStudioPage: React.FC = () => {
                 </div>
 
                 <div className="input-group">
-                  <label className="input-label">Status</label>
-                  <select
-                    className="form-select"
-                    value={String(isPublished)}
-                    onChange={(e) => setIsPublished(e.target.value === 'true')}
-                  >
-                    <option value="false">Draft (Unpublished)</option>
-                    <option value="true">Published (Live in App)</option>
-                  </select>
+                  <label className="input-label">Publishing Status</label>
+                  <div style={{ padding: '0.5rem 0.75rem', backgroundColor: 'var(--color-surface-muted)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '38px' }}>
+                    <span className={`badge ${editingGame?.is_published ? 'badge-success' : 'badge-warning'}`}>
+                      {editingGame?.is_published ? 'Published' : 'Draft'}
+                    </span>
+                    <small style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>
+                      Publishing is managed via "Publish Release" after validation.
+                    </small>
+                  </div>
                 </div>
               </div>
 
