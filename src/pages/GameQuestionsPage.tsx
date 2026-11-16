@@ -484,8 +484,11 @@ export const GameQuestionsPage: React.FC = () => {
     }
 
     if (questionType === 'image_selection' || questionType === 'find_correct_picture' || questionType === 'find_different_picture') {
-      const missingImg = options.some((o) => !o.media_asset && !o.media_asset_id);
-      if (missingImg) return 'This question format requires an image asset for every answer option.';
+      const missingIndex = options.findIndex((o) => !o.media_asset && !o.media_asset_id);
+      if (missingIndex !== -1) {
+        const optLabel = options[missingIndex].option_text?.trim() || `Option ${missingIndex + 1}`;
+        return `Option #${missingIndex + 1} ("${optLabel}") requires an image asset for this format.`;
+      }
     }
 
     if (questionType === 'identify_object' || questionType === 'match_picture_word') {
@@ -567,7 +570,7 @@ export const GameQuestionsPage: React.FC = () => {
         option_text: o.option_text,
         is_correct: o.is_correct,
         sort_order: idx + 1,
-        media_asset_id: o.media_asset?.id || null,
+        media_asset_id: o.media_asset?.id || o.media_asset_id || null,
       }));
 
       const { error: optError } = await supabase.from('question_options').insert(optionRows);
@@ -648,7 +651,7 @@ export const GameQuestionsPage: React.FC = () => {
         option_text: o.option_text,
         is_correct: o.is_correct,
         sort_order: idx + 1,
-        media_asset_id: o.media_asset?.id || null,
+        media_asset_id: o.media_asset?.id || o.media_asset_id || null,
       }));
 
       const { error: optError } = await supabase.from('question_options').insert(optionRows);
@@ -1096,12 +1099,12 @@ export const GameQuestionsPage: React.FC = () => {
                       />
 
                       {/* Option Image Media Asset */}
-                      {questionType === 'image_selection' && (
-                        <div>
+                      {questionType !== 'true_false' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
                           {opt.media_asset ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                              <div style={{ width: '32px', height: '32px' }}>
-                                <MediaPreviewTile asset={opt.media_asset} height="32px" />
+                              <div style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
+                                <MediaPreviewTile asset={opt.media_asset} height="36px" />
                               </div>
                               <button
                                 type="button"
@@ -1110,8 +1113,11 @@ export const GameQuestionsPage: React.FC = () => {
                                     prev.map((o) => (o.id === opt.id ? { ...o, media_asset: null, media_asset_id: null } : o))
                                   );
                                 }}
+                                className="btn btn-secondary btn-sm"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                                title="Remove Option Image"
                               >
-                                Remove
+                                Remove Image
                               </button>
                             </div>
                           ) : (
@@ -1122,8 +1128,10 @@ export const GameQuestionsPage: React.FC = () => {
                                 setMediaModalOpen(true);
                               }}
                               className="btn btn-secondary btn-sm"
+                              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                              title="Attach Option Image"
                             >
-                              <ImageIcon size={14} /> Add Image
+                              <ImageIcon size={14} /> Attach Image
                             </button>
                           )}
                         </div>
