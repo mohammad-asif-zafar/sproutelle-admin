@@ -10,7 +10,7 @@ import {
   Copy,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { Game, Question, MediaAsset, HomescreenExplorer, HomescreenExplorerSubcategory } from '../types/database';
+import type { Game, Question, MediaAsset, HomescreenExplorer, HomescreenExplorerSubcategory, GameLevel } from '../types/database';
 import { Modal } from '../components/Common/Modal';
 import { MediaSelectorModal } from '../components/Media/MediaSelectorModal';
 import { MediaPreviewTile } from '../components/Media/MediaPreviewTile';
@@ -42,6 +42,17 @@ export const GameQuestionsPage: React.FC = () => {
       : null
   );
 
+  // Level Management State
+  const [gameLevels, setGameLevels] = useState<GameLevel[]>([]);
+  const [selectedLevelId, setSelectedLevelId] = useState<string | null>(null);
+  const [levelModalOpen, setLevelModalOpen] = useState<boolean>(false);
+  const [editingLevel, setEditingLevel] = useState<GameLevel | null>(null);
+  const [deleteConfirmLevel, setDeleteConfirmLevel] = useState<GameLevel | null>(null);
+  const [levelNumber, setLevelNumber] = useState<number>(1);
+  const [levelTitle, setLevelTitle] = useState<string>('');
+  const [levelDescription, setLevelDescription] = useState<string>('');
+  const [levelPassScore, setLevelPassScore] = useState<number>(80);
+
   // Modals & Form State
   const [modalOpen, setModalOpen] = useState<boolean>(false);
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -70,6 +81,103 @@ export const GameQuestionsPage: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
 
   const openedModalGameIdRef = useRef<string | null>(null);
+
+  const openLevelModal = (level?: GameLevel) => {
+    if (level) {
+      setEditingLevel(level);
+      setLevelNumber(level.level_number);
+      setLevelTitle(level.title || '');
+      setLevelDescription(level.description || '');
+      setLevelPassScore(level.pass_score || 80);
+    } else {
+      setEditingLevel(null);
+      setLevelNumber(gameLevels.length + 1);
+      setLevelTitle(`Level ${gameLevels.length + 1}`);
+      setLevelDescription('');
+      setLevelPassScore(80);
+    }
+    setLevelModalOpen(true);
+  };
+
+  const handleSaveLevel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gameId) return;
+
+    if (levelNumber <= 0) {
+      alert('Level number must be greater than 0.');
+      return;
+    }
+
+    if (levelPassScore < 0 || levelPassScore > 100) {
+      alert('Passing score must be between 0% and 100%.');
+      return;
+    }
+
+    const duplicateLvl = gameLevels.find((l) => l.level_number === levelNumber && l.id !== editingLevel?.id);
+    if (duplicateLvl) {
+      alert(`Level number ${levelNumber} already exists for this game.`);
+      return;
+    }
+
+    try {
+      const payload = {
+        game_id: gameId,
+        level_number: levelNumber,
+        title: levelTitle.trim() || `Level ${levelNumber}`,
+        description: levelDescription.trim() || null,
+        pass_score: levelPassScore,
+        sort_order: levelNumber,
+      };
+
+      if (editingLevel) {
+        const { error } = await supabase.from('game_levels').update(payload).eq('id', editingLevel.id).eq('game_id', gameId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('game_levels').insert(payload);
+        if (error) throw error;
+      }
+
+      const { data: updatedLevels, error: fetchErr } = await supabase
+        .from('game_levels')
+        .select('*')
+        .eq('game_id', gameId)
+        .order('level_number', { ascending: true });
+
+      if (fetchErr) throw fetchErr;
+      if (updatedLevels) setGameLevels(updatedLevels as GameLevel[]);
+      setLevelModalOpen(false);
+    } catch (err) {
+      console.error('Failed saving game level:', err);
+      const msg = err instanceof Error ? err.message : 'Failed saving level.';
+      alert(`Level Save Error: ${msg}`);
+    }
+  };
+
+  const handleDeleteLevel = async () => {
+    if (!deleteConfirmLevel || !gameId) return;
+    try {
+      const { error } = await supabase.from('game_levels').delete().eq('id', deleteConfirmLevel.id).eq('game_id', gameId);
+      if (error) throw error;
+
+      if (selectedLevelId === deleteConfirmLevel.id) {
+        setSelectedLevelId(null);
+      }
+
+      const { data: updatedLevels, error: fetchErr } = await supabase
+        .from('game_levels')
+        .select('*')
+        .eq('game_id', gameId)
+        .order('level_number', { ascending: true });
+
+      if (fetchErr) throw fetchErr;
+      if (updatedLevels) setGameLevels(updatedLevels as GameLevel[]);
+      setDeleteConfirmLevel(null);
+    } catch (err) {
+      console.error('Failed deleting level:', err);
+      const msg = err instanceof Error ? err.message : 'Failed deleting level.';
+      alert(`Level Deletion Error: ${msg}`);
+    }
+  };
 
   const handleBackNavigation = () => {
     if ((state?.origin === 'subcategory_games' || state?.fromSubcategory) && state?.explorerId && state?.fromSubcategory) {
@@ -147,12 +255,21 @@ export const GameQuestionsPage: React.FC = () => {
         setSubcategoryInfo(subRecord);
         setExplorerInfo(subRecord.explorer);
 
-        const qRes = await supabase
-          .from('questions')
-          .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
-          .eq('game_id', gameData.id)
-          .eq('subcategory_id', subcategoryId)
-          .order('sort_order', { ascending: true });
+        const [qRes, levelsRes] = await Promise.all([
+          supabase
+            .from('questions')
+            .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
+            .eq('game_id', gameData.id)
+            .eq('subcategory_id', subcategoryId)
+            .order('sort_order', { ascending: true }),
+          supabase
+            .from('game_levels')
+            .select('*')
+            .eq('game_id', gameData.id)
+            .order('level_number', { ascending: true }),
+        ]);
+
+        if (levelsRes.data) setGameLevels(levelsRes.data as GameLevel[]);
 
         if (!isMounted) return;
 
@@ -213,6 +330,7 @@ export const GameQuestionsPage: React.FC = () => {
       return;
     }
     setEditingQuestion(null);
+    setSelectedLevelId(null);
     setQuestionText('');
     setInstructions('');
     setSortOrder(questions.length + 1);
@@ -229,6 +347,7 @@ export const GameQuestionsPage: React.FC = () => {
 
   const openEditModal = (q: Question) => {
     setEditingQuestion(q);
+    setSelectedLevelId(q.level_id || null);
     setQuestionText(q.question_text);
     setQuestionType(q.question_type || game?.game_type || 'multiple_choice');
     setInstructions(q.instructions || '');
@@ -259,9 +378,18 @@ export const GameQuestionsPage: React.FC = () => {
 
   const handleDuplicateQuestion = async (q: Question) => {
     if (!gameId || !game) return;
+    const subcategoryId = state?.fromSubcategory;
+    if (!subcategoryId) {
+      alert('Missing Subcategory context.');
+      return;
+    }
+
+    const validLevelId = q.level_id && gameLevels.some((l) => l.id === q.level_id) ? q.level_id : null;
 
     const clonedPayload = {
       game_id: gameId,
+      subcategory_id: subcategoryId,
+      level_id: validLevelId,
       question_text: `${q.question_text} (Copy)`,
       question_type: q.question_type,
       instructions: q.instructions,
@@ -287,25 +415,27 @@ export const GameQuestionsPage: React.FC = () => {
           option_text: o.option_text,
           is_correct: o.is_correct,
           sort_order: idx + 1,
-          media_asset_id: o.media_asset_id,
+          media_asset_id: o.media_asset_id || o.media_asset?.id || null,
         }));
         const { error: optErr } = await supabase.from('question_options').insert(optionRows);
         if (optErr) {
-          await supabase.from('questions').delete().eq('id', insertedQ.id).eq('game_id', gameId);
+          await supabase.from('questions').delete().eq('id', insertedQ.id).eq('game_id', gameId).eq('subcategory_id', subcategoryId);
           throw optErr;
         }
       }
 
-      // Reload questions
+      // Reload questions strictly scoped by both game_id and subcategory_id
       const { data: qRes } = await supabase
         .from('questions')
         .select('*, options:question_options(*, media_asset:media_assets(*)), image_asset:media_assets!questions_image_asset_id_fkey(*), audio_asset:media_assets!questions_audio_asset_id_fkey(*)')
         .eq('game_id', gameId)
+        .eq('subcategory_id', subcategoryId)
         .order('sort_order', { ascending: true });
       if (qRes) setQuestions(qRes as Question[]);
     } catch (err) {
       console.error('Failed duplicating question securely:', err);
-      alert('Failed to duplicate question securely.');
+      const msg = err instanceof Error ? err.message : 'Database save failed.';
+      alert(`Question Duplication Error: ${msg}`);
     }
   };
 
@@ -353,9 +483,13 @@ export const GameQuestionsPage: React.FC = () => {
       if (correctCount !== 1) return 'True / False template must have exactly one correct option.';
     }
 
-    if (questionType === 'image_selection') {
+    if (questionType === 'image_selection' || questionType === 'find_correct_picture' || questionType === 'find_different_picture') {
       const missingImg = options.some((o) => !o.media_asset && !o.media_asset_id);
-      if (missingImg) return 'Image Selection template requires an image asset for every answer option.';
+      if (missingImg) return 'This question format requires an image asset for every answer option.';
+    }
+
+    if (questionType === 'identify_object' || questionType === 'match_picture_word') {
+      if (!imageAsset) return 'This question format requires a main illustration/picture asset.';
     }
 
     return null;
@@ -393,6 +527,7 @@ export const GameQuestionsPage: React.FC = () => {
       const questionPayload = {
         game_id: gameId,
         subcategory_id: subcategoryId,
+        level_id: selectedLevelId || null,
         question_text: questionText.trim(),
         question_type: questionType,
         instructions: instructions.trim() || null,
@@ -493,6 +628,7 @@ export const GameQuestionsPage: React.FC = () => {
       const questionPayload = {
         game_id: gameId,
         subcategory_id: subcategoryId,
+        level_id: selectedLevelId || null,
         question_text: questionText.trim(),
         question_type: questionType,
         instructions: instructions.trim() || null,
@@ -824,6 +960,33 @@ export const GameQuestionsPage: React.FC = () => {
                 />
               </div>
 
+              {/* Target Level */}
+              <div className="input-group">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
+                  <label className="input-label" style={{ margin: 0 }}>Target Level (Optional)</label>
+                  <button
+                    type="button"
+                    onClick={() => openLevelModal()}
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                  >
+                    + Manage Levels
+                  </button>
+                </div>
+                <select
+                  className="form-select"
+                  value={selectedLevelId || ''}
+                  onChange={(e) => setSelectedLevelId(e.target.value || null)}
+                >
+                  <option value="">None (Unassigned / Base Level)</option>
+                  {gameLevels.map((lvl) => (
+                    <option key={lvl.id} value={lvl.id}>
+                      Level {lvl.level_number}: {lvl.title || `Level ${lvl.level_number}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Question Type */}
               <div className="input-group">
                 <label className="input-label">Question Format / Type</label>
@@ -841,11 +1004,16 @@ export const GameQuestionsPage: React.FC = () => {
                     }
                   }}
                 >
-                  <option value="multiple_choice">Multiple Choice</option>
-                  <option value="image_selection">Image Selection</option>
-                  <option value="audio_recognition">Audio Recognition / Listen & Guess</option>
-                  <option value="matching">Matching Pairs</option>
-                  <option value="true_false">True / False</option>
+                  <option value="find_correct_picture">Find the Correct Picture (Picture Quest)</option>
+                  <option value="identify_object">Identify the Object (Picture Quest)</option>
+                  <option value="match_picture_word">Match Picture and Word (Picture Quest)</option>
+                  <option value="find_different_picture">Find the Different Picture (Picture Quest)</option>
+                  <option value="category_identification">Category Identification (Picture Quest)</option>
+                  <option value="multiple_choice">Multiple Choice (Standard)</option>
+                  <option value="image_selection">Image Selection (Standard)</option>
+                  <option value="audio_recognition">Audio Recognition (Standard)</option>
+                  <option value="matching">Matching Pairs (Standard)</option>
+                  <option value="true_false">True / False (Standard)</option>
                 </select>
               </div>
 
@@ -1049,6 +1217,104 @@ export const GameQuestionsPage: React.FC = () => {
           mediaTypeFilter={mediaTarget === 'question_audio' ? 'audio' : 'image'}
           title="Select Media Asset"
         />
+      )}
+
+      {/* Level Add / Edit Modal */}
+      {levelModalOpen && (
+        <Modal
+          isOpen={levelModalOpen}
+          onClose={() => setLevelModalOpen(false)}
+          title={editingLevel ? 'Edit Game Level' : 'Add New Game Level'}
+          maxWidth="500px"
+        >
+          <form onSubmit={handleSaveLevel}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div className="input-group">
+                <label className="input-label">Level Number</label>
+                <input
+                  type="number"
+                  className="form-control"
+                  min={1}
+                  value={levelNumber}
+                  onChange={(e) => setLevelNumber(Number(e.target.value))}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Level Title</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  placeholder="e.g. Level 1 – Easy"
+                  value={levelTitle}
+                  onChange={(e) => setLevelTitle(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Description (Optional)</label>
+                <textarea
+                  className="form-control"
+                  rows={2}
+                  placeholder="Brief description of level objectives..."
+                  value={levelDescription}
+                  onChange={(e) => setLevelDescription(e.target.value)}
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Passing Score (%)</label>
+                <input
+                  type="number"
+                  className="form-control"
+                  min={0}
+                  max={100}
+                  value={levelPassScore}
+                  onChange={(e) => setLevelPassScore(Number(e.target.value))}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setLevelModalOpen(false)}
+                  className="btn btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Save Level
+                </button>
+              </div>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Delete Level Confirmation Modal */}
+      {deleteConfirmLevel && (
+        <Modal
+          isOpen={Boolean(deleteConfirmLevel)}
+          onClose={() => setDeleteConfirmLevel(null)}
+          title="Confirm Level Deletion"
+        >
+          <div>
+            <p style={{ marginBottom: '1.5rem', lineHeight: 1.5 }}>
+              Are you sure you want to delete <strong>{deleteConfirmLevel.title || `Level ${deleteConfirmLevel.level_number}`}</strong>? Assigned questions will be safely preserved under the game without a level assignment.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button onClick={() => setDeleteConfirmLevel(null)} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button onClick={handleDeleteLevel} className="btn btn-danger">
+                Delete Level
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Delete Confirmation Modal */}
