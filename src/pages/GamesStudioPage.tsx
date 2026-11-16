@@ -12,7 +12,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import type { Game, GameCategory, Question, MediaAsset } from '../types/database';
+import type { Game, GameCategory, Question, MediaAsset, GameLevel } from '../types/database';
 import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { validateActivityForPublication, type ValidationReport } from '../lib/publisher';
 import { Modal } from '../components/Common/Modal';
@@ -321,20 +321,53 @@ export const GamesStudioPage: React.FC = () => {
     setPublishErrorMsg(null);
 
     let questions: Question[] = [];
+    let levels: GameLevel[] = [];
+    const activeSubcategoryIds = new Set<string>();
+
     if (isSupabaseConfigured) {
       try {
-        const { data } = await supabase
-          .from('questions')
-          .select('*, options:question_options(*)')
-          .eq('game_id', game.id)
-          .order('sort_order', { ascending: true });
-        if (data) questions = data as Question[];
+        const [qRes, assignRes, levelsRes] = await Promise.all([
+          supabase
+            .from('questions')
+            .select('*, options:question_options(*)')
+            .eq('game_id', game.id)
+            .order('sort_order', { ascending: true }),
+          supabase
+            .from('subcategory_games')
+            .select('subcategory_id')
+            .eq('game_id', game.id)
+            .eq('is_active', true),
+          supabase
+            .from('game_levels')
+            .select('*')
+            .eq('game_id', game.id)
+            .order('level_number', { ascending: true }),
+        ]);
+
+        if (qRes.error) throw qRes.error;
+        if (assignRes.error) throw assignRes.error;
+
+        if (qRes.data) questions = qRes.data as Question[];
+        if (assignRes.data) {
+          (assignRes.data as Array<{ subcategory_id: string }>).forEach((a) => {
+            if (a.subcategory_id) activeSubcategoryIds.add(a.subcategory_id);
+          });
+        }
+        if (levelsRes.data) levels = levelsRes.data as GameLevel[];
       } catch (err) {
-        console.error('Failed loading questions for validation:', err);
+        console.error('Failed loading publication data:', err);
+        const msg = err instanceof Error ? err.message : 'Database query failed.';
+        setValidationReport({
+          eligible: false,
+          errors: [`Publication Data Load Failure: Could not verify subcategory assignments or questions (${msg}).`],
+          warnings: [],
+          snapshot: null,
+        });
+        return;
       }
     }
 
-    const report = validateActivityForPublication(game, questions, mediaAssets);
+    const report = validateActivityForPublication(game, questions, mediaAssets, activeSubcategoryIds, levels);
     setValidationReport(report);
   };
 

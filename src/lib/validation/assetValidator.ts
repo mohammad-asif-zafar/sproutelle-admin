@@ -30,6 +30,16 @@ export function validateAssets(
           entityType: 'asset',
         });
       } else {
+        if (!found.file_path || !found.file_path.trim() || !found.bucket_name || !found.bucket_name.trim()) {
+          errors.push({
+            code: 'ERR_ASSET_INVALID_STORAGE_PATH',
+            message: `Question #${qNum} references ${role} asset (${found.name}) which has an invalid or empty storage path in database records.`,
+            severity: 'error',
+            field: role,
+            entityId,
+            entityType: 'asset',
+          });
+        }
         if (role.includes('audio') && !found.mime_type.startsWith('audio/')) {
           warnings.push({
             code: 'WARN_ASSET_MIME_MISMATCH_AUDIO',
