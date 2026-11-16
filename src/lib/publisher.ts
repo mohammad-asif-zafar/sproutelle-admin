@@ -114,8 +114,15 @@ export function validateActivityForPublication(
     errors.push(`Publication Blocked: Game "${game.name}" has 0 active subcategory assignments. Assign the game to at least one active subcategory in Explorer Studio before publishing.`);
   }
 
-  // 2. Validate question ownership, subcategory assignment membership, and level ownership BEFORE filtering
-  const validLevelIds = new Set((gameLevels || []).map((l) => l.id));
+  // 2. Validate game_levels ownership: filter validLevelIds strictly from levels belonging to target game
+  const validLevelIds = new Set<string>();
+  (gameLevels || []).forEach((lvl, idx) => {
+    if (lvl.game_id !== game.id) {
+      errors.push(`Level #${lvl.level_number || idx + 1} ("${lvl.title || 'Untitled'}") belongs to game ID "${lvl.game_id}", which does not match target game "${game.id}".`);
+    } else {
+      validLevelIds.add(lvl.id);
+    }
+  });
 
   questions.forEach((q, idx) => {
     const qNum = idx + 1;
@@ -135,7 +142,7 @@ export function validateActivityForPublication(
     }
 
     if (q.level_id && !validLevelIds.has(q.level_id)) {
-      errors.push(`Question #${qNum} refers to level ID "${q.level_id}", which does not belong to target game "${game.id}".`);
+      errors.push(`Question #${qNum} refers to level ID "${q.level_id}", which does not exist for target game "${game.id}".`);
     }
   });
 

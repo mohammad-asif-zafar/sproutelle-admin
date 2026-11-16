@@ -1,34 +1,23 @@
 /**
- * Sproutelle Admin Content Studio - Publishing Validation Test Suite
+ * Sproutelle Admin Content Studio - Publishing Validation Vitest Test Suite
  * File: src/lib/validation/publisher.test.ts
  */
 
+import { describe, it, expect } from 'vitest';
 import type { Game, Question, MediaAsset, GameLevel } from '../../types/database';
-import { validateActivityForPublication, type PublicPublishedContentPack } from '../publisher';
+import { validateActivityForPublication, type PublicPublishedContentPack, type PublicPublishedQuestionOption } from '../publisher';
 import { validateAssets } from './assetValidator';
+import { parsePublicationDataQueries } from './queryParser';
 
-export function runPublisherValidationTests(): { passed: number; failed: number; log: string[] } {
-  const log: string[] = [];
-  let passed = 0;
-  let failed = 0;
-
-  const assert = (condition: boolean, testName: string, detail?: string) => {
-    if (condition) {
-      passed++;
-      log.push(`✓ PASSED: ${testName}`);
-    } else {
-      failed++;
-      log.push(`✕ FAILED: ${testName} - ${detail || 'Assertion failed'}`);
-    }
-  };
-
+describe('Sproutelle Publisher Validation Pipeline', () => {
   const mockGame: Game = {
     id: 'game-1',
     name: 'Picture Quest',
     slug: 'picture-quest',
-    game_type: 'find_correct_picture',
+    game_type: 'guess_game',
     is_published: true,
     sort_order: 1,
+    config: { question_count: 1, difficulty: 'beginner', min_age: 3, max_age: 8 },
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -82,157 +71,181 @@ export function runPublisherValidationTests(): { passed: number; failed: number;
     created_at: new Date().toISOString(),
   };
 
-  // 1. Zero active assignments
-  {
-    const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('0 active subcategory assignments')),
-      'Test 1: Zero active assignments blocks publication'
-    );
-  }
+  describe('Publication Data Loading Query Parser', () => {
+    it('handles questions query failure', () => {
+      const qRes = { data: null, error: { message: 'Failed to connect to database' } };
+      const assignRes = { data: [{ subcategory_id: 'sub-1' }], error: null };
+      const levelsRes = { data: [validLevel], error: null };
 
-  // 2. Assignment query failure simulation (handled as empty set)
-  {
-    const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(), [validLevel]);
-    assert(!report.eligible, 'Test 2: Query failure simulation blocks publication');
-  }
+      const result = parsePublicationDataQueries(qRes, assignRes, levelsRes);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Questions Query Failure');
+    });
 
-  // 3. Empty levels with a question referencing a level
-  {
-    const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(['sub-1']), []);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('refers to level ID')),
-      'Test 3: Empty levels list with level-assigned question blocks publication'
-    );
-  }
+    it('handles subcategory assignment query failure', () => {
+      const qRes = { data: [validQuestion], error: null };
+      const assignRes = { data: null, error: { message: 'Permission denied on subcategory_games' } };
+      const levelsRes = { data: [validLevel], error: null };
 
-  // 4. Level belonging to another game
-  {
-    const qOtherLevel: Question = { ...validQuestion, level_id: 'lvl-other-game' };
-    const report = validateActivityForPublication(mockGame, [qOtherLevel], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('does not belong to target game')),
-      'Test 4: Level ID belonging to another game blocks publication'
-    );
-  }
+      const result = parsePublicationDataQueries(qRes, assignRes, levelsRes);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Subcategory Assignments Query Failure');
+    });
 
-  // 5. Invalid question game_id
-  {
-    const qOtherGame: Question = { ...validQuestion, game_id: 'other-game-id' };
-    const report = validateActivityForPublication(mockGame, [qOtherGame], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('does not match target game')),
-      'Test 5: Invalid question game_id blocks publication'
-    );
-  }
+    it('handles game levels query failure', () => {
+      const qRes = { data: [validQuestion], error: null };
+      const assignRes = { data: [{ subcategory_id: 'sub-1' }], error: null };
+      const levelsRes = { data: null, error: { message: 'Network timeout on game_levels' } };
 
-  // 6. NULL subcategory on a published question
-  {
-    const qNullSub: Question = { ...validQuestion, subcategory_id: null };
-    const report = validateActivityForPublication(mockGame, [qNullSub], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('NULL subcategory ID')),
-      'Test 6: Published question with NULL subcategory_id blocks publication'
-    );
-  }
+      const result = parsePublicationDataQueries(qRes, assignRes, levelsRes);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Game Levels Query Failure');
+    });
 
-  // 7. Inactive subcategory assignment
-  {
-    const qInactiveSub: Question = { ...validQuestion, subcategory_id: 'sub-inactive' };
-    const report = validateActivityForPublication(mockGame, [qInactiveSub], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('inactive or unassigned subcategory ID')),
-      'Test 7: Published question under inactive subcategory assignment blocks publication'
-    );
-  }
+    it('successfully parses all three queries', () => {
+      const qRes = { data: [validQuestion], error: null };
+      const assignRes = { data: [{ subcategory_id: 'sub-1' }], error: null };
+      const levelsRes = { data: [validLevel], error: null };
 
-  // 8. Missing media metadata
-  {
-    const qMissingAsset: Question = { ...validQuestion, image_asset_id: 'non-existent-asset' };
-    const report = validateActivityForPublication(mockGame, [qMissingAsset], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      !report.eligible && report.errors.some((e) => e.includes('does not exist in media library')),
-      'Test 8: Missing media asset metadata blocks publication'
-    );
-  }
+      const result = parsePublicationDataQueries(qRes, assignRes, levelsRes);
+      expect(result.success).toBe(true);
+      expect(result.questions).toHaveLength(1);
+      expect(result.activeSubcategoryIds.has('sub-1')).toBe(true);
+      expect(result.levels).toHaveLength(1);
+    });
+  });
 
-  // 9. Empty storage path
-  {
-    const emptyPathAsset: MediaAsset = { ...mockAsset, file_path: '' };
-    const res = validateAssets([validQuestion], [emptyPathAsset, mockAudio]);
-    assert(
-      !res.valid && res.errors.some((e) => e.code === 'ERR_ASSET_EMPTY_FILE_PATH'),
-      'Test 9: Empty storage file_path blocks asset validation'
-    );
-  }
+  describe('Level & Assignment Validation', () => {
+    it('blocks publication when game has 0 active assignments', () => {
+      const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(), [validLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('0 active subcategory assignments'))).toBe(true);
+    });
 
-  // 10. Empty bucket name
-  {
-    const emptyBucketAsset: MediaAsset = { ...mockAsset, bucket_name: '   ' };
-    const res = validateAssets([validQuestion], [emptyBucketAsset, mockAudio]);
-    assert(
-      !res.valid && res.errors.some((e) => e.code === 'ERR_ASSET_EMPTY_BUCKET_NAME'),
-      'Test 10: Empty storage bucket_name blocks asset validation'
-    );
-  }
+    it('blocks publication when question references non-existent level in empty levels list', () => {
+      const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(['sub-1']), []);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('does not exist for target game'))).toBe(true);
+    });
 
-  // 11. Incorrect image/audio MIME type
-  {
-    const wrongMimeAudio: MediaAsset = { ...mockAudio, mime_type: 'image/png' };
-    const res = validateAssets([validQuestion], [mockAsset, wrongMimeAudio]);
-    assert(
-      !res.valid && res.errors.some((e) => e.code === 'ERR_ASSET_MIME_MISMATCH_AUDIO'),
-      'Test 11: Incorrect audio MIME type blocks asset validation'
-    );
-  }
+    it('blocks publication when question references a level belonging to another game', () => {
+      const otherGameLevel: GameLevel = { ...validLevel, id: 'lvl-other-game', game_id: 'other-game-id' };
+      const qOtherLevel: Question = { ...validQuestion, level_id: 'lvl-other-game' };
+      const report = validateActivityForPublication(mockGame, [qOtherLevel], [mockAsset, mockAudio], new Set(['sub-1']), [otherGameLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('does not match target game') || e.includes('does not exist for target game'))).toBe(true);
+    });
 
-  // 12. Draft questions excluded from the release
-  {
-    const draftQ: Question = { ...validQuestion, id: 'q-draft', is_draft: true };
-    const report = validateActivityForPublication(mockGame, [validQuestion, draftQ], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
-    assert(
-      report.eligible && report.snapshot?.questions.length === 1 && report.snapshot.questions[0].id === 'q-1',
-      'Test 12: Draft questions excluded from release snapshot'
-    );
-  }
+    it('blocks publication when question game_id does not match target game', () => {
+      const qOtherGame: Question = { ...validQuestion, game_id: 'other-game-id' };
+      const report = validateActivityForPublication(mockGame, [qOtherGame], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('does not match target game'))).toBe(true);
+    });
 
-  // 13. Public type contains no is_correct field
-  {
-    const publicPack: PublicPublishedContentPack = {
-      pack_version: '1.0.1',
-      generated_at: new Date().toISOString(),
-      game_id: 'game-1',
-      game_name: 'Picture Quest',
-      game_slug: 'picture-quest',
-      engine_type: 'find_correct_picture',
-      config: { question_count: 5 },
-      questions: [
-        {
-          id: 'q-1',
-          game_id: 'game-1',
-          subcategory_id: 'sub-1',
-          level_id: 'lvl-1',
-          question_text: 'Which one is an apple?',
-          question_type: 'find_correct_picture',
-          sort_order: 1,
-          options: [
-            { id: 'opt-1', question_id: 'q-1', option_text: 'Apple', sort_order: 1, media_asset_id: 'asset-1' },
-          ],
-        },
-      ],
-      referenced_assets: [],
-    };
+    it('blocks publication when published question has NULL subcategory_id', () => {
+      const qNullSub: Question = { ...validQuestion, subcategory_id: null };
+      const report = validateActivityForPublication(mockGame, [qNullSub], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('NULL subcategory ID'))).toBe(true);
+    });
 
-    const keys = Object.keys(publicPack.questions[0].options[0]);
-    assert(
-      !keys.includes('is_correct'),
-      'Test 13: PublicPublishedContentPack options interface excludes is_correct'
-    );
-  }
+    it('blocks publication when published question belongs to an inactive subcategory assignment', () => {
+      const qInactiveSub: Question = { ...validQuestion, subcategory_id: 'sub-inactive' };
+      const report = validateActivityForPublication(mockGame, [qInactiveSub], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('inactive or unassigned subcategory ID'))).toBe(true);
+    });
+  });
 
-  return { passed, failed, log };
-}
+  describe('Media Asset Validation', () => {
+    it('blocks publication when referenced media asset metadata is missing', () => {
+      const qMissingAsset: Question = { ...validQuestion, image_asset_id: 'non-existent-asset' };
+      const report = validateActivityForPublication(mockGame, [qMissingAsset], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(false);
+      expect(report.errors.some((e) => e.includes('does not exist in media library'))).toBe(true);
+    });
 
-// Automatically execute validation test suite on module load
-const testResult = runPublisherValidationTests();
-console.log(`[Publisher Validation Test Suite] Passed: ${testResult.passed}/${testResult.passed + testResult.failed}`);
+    it('blocks validation when storage file_path is empty', () => {
+      const emptyPathAsset: MediaAsset = { ...mockAsset, file_path: '' };
+      const res = validateAssets([validQuestion], [emptyPathAsset, mockAudio]);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some((e) => e.code === 'ERR_ASSET_EMPTY_FILE_PATH')).toBe(true);
+    });
+
+    it('blocks validation when storage bucket_name is empty', () => {
+      const emptyBucketAsset: MediaAsset = { ...mockAsset, bucket_name: '   ' };
+      const res = validateAssets([validQuestion], [emptyBucketAsset, mockAudio]);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some((e) => e.code === 'ERR_ASSET_EMPTY_BUCKET_NAME')).toBe(true);
+    });
+
+    it('blocks validation on audio MIME type mismatch', () => {
+      const wrongMimeAudio: MediaAsset = { ...mockAudio, mime_type: 'image/png' };
+      const res = validateAssets([validQuestion], [mockAsset, wrongMimeAudio]);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some((e) => e.code === 'ERR_ASSET_MIME_MISMATCH_AUDIO')).toBe(true);
+    });
+
+    it('blocks validation on image MIME type mismatch', () => {
+      const wrongMimeImage: MediaAsset = { ...mockAsset, mime_type: 'audio/mp3' };
+      const res = validateAssets([validQuestion], [wrongMimeImage, mockAudio]);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some((e) => e.code === 'ERR_ASSET_MIME_MISMATCH_IMAGE')).toBe(true);
+    });
+  });
+
+  describe('Release Snapshot & Type Safety', () => {
+    it('excludes draft questions from the generated release snapshot', () => {
+      const draftQ: Question = { ...validQuestion, id: 'q-draft', is_draft: true };
+      const report = validateActivityForPublication(mockGame, [validQuestion, draftQ], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(true);
+      expect(report.snapshot?.questions).toHaveLength(1);
+      expect(report.snapshot?.questions[0].id).toBe('q-1');
+    });
+
+    it('includes all referenced question images, audio assets, and option images in referenced_assets', () => {
+      const report = validateActivityForPublication(mockGame, [validQuestion], [mockAsset, mockAudio], new Set(['sub-1']), [validLevel]);
+      expect(report.eligible).toBe(true);
+      expect(report.snapshot?.referenced_assets).toHaveLength(2);
+      expect(report.snapshot?.referenced_assets.some((a) => a.id === 'asset-1')).toBe(true);
+      expect(report.snapshot?.referenced_assets.some((a) => a.id === 'audio-1')).toBe(true);
+    });
+
+    it('proves PublicPublishedQuestionOption excludes is_correct at compile time and runtime', () => {
+      // Compile-time TypeScript type assertion proving PublicPublishedQuestionOption rejects is_correct
+      type ExpectNoIsCorrectInOption<T> = 'is_correct' extends keyof T ? false : true;
+      type IsCorrectExcludedTypeCheck = ExpectNoIsCorrectInOption<PublicPublishedQuestionOption>;
+      const _typeAssertionCheck: IsCorrectExcludedTypeCheck = true;
+
+      const publicPack: PublicPublishedContentPack = {
+        pack_version: '1.0.1',
+        generated_at: new Date().toISOString(),
+        game_id: 'game-1',
+        game_name: 'Picture Quest',
+        game_slug: 'picture-quest',
+        engine_type: 'find_correct_picture',
+        config: { question_count: 5 },
+        questions: [
+          {
+            id: 'q-1',
+            game_id: 'game-1',
+            subcategory_id: 'sub-1',
+            level_id: 'lvl-1',
+            question_text: 'Which one is an apple?',
+            question_type: 'find_correct_picture',
+            sort_order: 1,
+            options: [
+              { id: 'opt-1', question_id: 'q-1', option_text: 'Apple', sort_order: 1, media_asset_id: 'asset-1' },
+            ],
+          },
+        ],
+        referenced_assets: [],
+      };
+
+      const keys = Object.keys(publicPack.questions[0].options[0]);
+      expect(keys.includes('is_correct')).toBe(false);
+      expect(_typeAssertionCheck).toBe(true);
+    });
+  });
+});

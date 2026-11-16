@@ -7,6 +7,11 @@ import type { Question, QuestionOption, MediaAsset } from '../../types/database'
 import type { ValidationMessage, ValidationResult } from './types';
 
 const SUPPORTED_QUESTION_TYPES = [
+  'find_correct_picture',
+  'identify_object',
+  'match_picture_word',
+  'find_different_picture',
+  'category_identification',
   'multiple_choice',
   'image_selection',
   'audio_recognition',

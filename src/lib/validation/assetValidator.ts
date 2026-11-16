@@ -30,31 +30,41 @@ export function validateAssets(
           entityType: 'asset',
         });
       } else {
-        if (!found.file_path || !found.file_path.trim() || !found.bucket_name || !found.bucket_name.trim()) {
+        if (!found.file_path || !found.file_path.trim()) {
           errors.push({
-            code: 'ERR_ASSET_INVALID_STORAGE_PATH',
-            message: `Question #${qNum} references ${role} asset (${found.name}) which has an invalid or empty storage path in database records.`,
+            code: 'ERR_ASSET_EMPTY_FILE_PATH',
+            message: `Question #${qNum} references ${role} asset (${found.name}) which has an empty or invalid file_path in database records.`,
             severity: 'error',
             field: role,
             entityId,
             entityType: 'asset',
           });
         }
-        if (role.includes('audio') && !found.mime_type.startsWith('audio/')) {
-          warnings.push({
-            code: 'WARN_ASSET_MIME_MISMATCH_AUDIO',
-            message: `Question #${qNum} audio asset (${found.name}) has MIME type "${found.mime_type}", expected audio/* format.`,
-            severity: 'warning',
+        if (!found.bucket_name || !found.bucket_name.trim()) {
+          errors.push({
+            code: 'ERR_ASSET_EMPTY_BUCKET_NAME',
+            message: `Question #${qNum} references ${role} asset (${found.name}) which has an empty or invalid bucket_name in database records.`,
+            severity: 'error',
             field: role,
             entityId,
             entityType: 'asset',
           });
         }
-        if (role.includes('image') && !found.mime_type.startsWith('image/')) {
-          warnings.push({
-            code: 'WARN_ASSET_MIME_MISMATCH_IMAGE',
-            message: `Question #${qNum} image asset (${found.name}) has MIME type "${found.mime_type}", expected image/* format.`,
-            severity: 'warning',
+        if (role.includes('audio') && (!found.mime_type || !found.mime_type.startsWith('audio/'))) {
+          errors.push({
+            code: 'ERR_ASSET_MIME_MISMATCH_AUDIO',
+            message: `Question #${qNum} audio asset (${found.name}) has invalid MIME type "${found.mime_type || 'empty'}", expected audio/* format.`,
+            severity: 'error',
+            field: role,
+            entityId,
+            entityType: 'asset',
+          });
+        }
+        if ((role.includes('image') || role.includes('option')) && (!found.mime_type || !found.mime_type.startsWith('image/'))) {
+          errors.push({
+            code: 'ERR_ASSET_MIME_MISMATCH_IMAGE',
+            message: `Question #${qNum} image asset (${found.name}) has invalid MIME type "${found.mime_type || 'empty'}", expected image/* format.`,
+            severity: 'error',
             field: role,
             entityId,
             entityType: 'asset',
