@@ -5,9 +5,9 @@
 
 import { describe, it, expect } from 'vitest';
 import type { Game, Question, MediaAsset, GameLevel } from '../../types/database';
-import { validateActivityForPublication, type PublicPublishedContentPack, type PublicPublishedQuestionOption } from '../publisher';
+import { validateActivityForPublication, type PublicPublishedContentPack, type PublicPublishedQuestionOption, type AdminReleasePackSnapshot } from '../publisher';
 import { validateAssets } from './assetValidator';
-import { parsePublicationDataQueries, loadPublicationData } from './queryParser';
+import { parsePublicationDataQueries, loadPublicationData, executePublishReleaseRPC } from './queryParser';
 import { validateQuestion } from './questionValidator';
 
 describe('Sproutelle Publisher Validation Pipeline', () => {
@@ -209,6 +209,97 @@ describe('Sproutelle Publisher Validation Pipeline', () => {
       expect(result.questions).toHaveLength(1);
       expect(result.activeSubcategoryIds.has('sub-1')).toBe(true);
       expect(result.levels).toHaveLength(1);
+    });
+  });
+
+  describe('Publishing RPC Execution & Active Release Verification', () => {
+    it('successfully calls publish_game_release and verifies 1 active release', async () => {
+      const mockSnapshot = {
+        pack_version: '1.0.9999',
+        game_id: '9e0aea7c-24a1-437b-89bd-11cd64b2d315',
+      };
+
+      const mockClient = {
+        rpc: async (fn: string) => {
+          if (fn === 'publish_game_release') return { data: true, error: null };
+          return { data: null, error: { message: 'Unknown RPC' } };
+        },
+        from: (table: string) => ({
+          select: () => ({
+            eq: () => ({
+              eq: async () => {
+                if (table === 'game_releases') return { data: [{ id: 'rel-1', version_number: '1.0.9999', is_active: true }], error: null };
+                return { data: [], error: null };
+              },
+            }),
+          }),
+        }),
+      };
+
+      const result = await executePublishReleaseRPC('9e0aea7c-24a1-437b-89bd-11cd64b2d315', mockSnapshot as unknown as AdminReleasePackSnapshot, mockClient);
+      expect(result.success).toBe(true);
+      expect(result.version).toBe('1.0.9999');
+    });
+
+    it('fails when publish_game_release RPC returns an error', async () => {
+      const mockSnapshot = { pack_version: '1.0.9999' };
+      const mockClient = {
+        rpc: async () => ({ data: null, error: { message: 'Game has no published questions' } }),
+        from: () => ({ select: () => ({ eq: () => ({ eq: async () => ({ data: [], error: null }) }) }) }),
+      };
+
+      const result = await executePublishReleaseRPC('9e0aea7c-24a1-437b-89bd-11cd64b2d315', mockSnapshot as unknown as AdminReleasePackSnapshot, mockClient);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Game has no published questions');
+    });
+
+    it('fails when active release post-verification query finds 0 active releases', async () => {
+      const mockSnapshot = { pack_version: '1.0.9999' };
+      const mockClient = {
+        rpc: async () => ({ data: true, error: null }),
+        from: () => ({ select: () => ({ eq: () => ({ eq: async () => ({ data: [], error: null }) }) }) }),
+      };
+
+      const result = await executePublishReleaseRPC('9e0aea7c-24a1-437b-89bd-11cd64b2d315', mockSnapshot as unknown as AdminReleasePackSnapshot, mockClient);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('no active release record was verified');
+    });
+
+    it('validates Picture Quest acceptance scenario fixture with Game 9e0aea7c-24a1-437b-89bd-11cd64b2d315', () => {
+      const pqGame: Game = {
+        ...mockGame,
+        id: '9e0aea7c-24a1-437b-89bd-11cd64b2d315',
+        name: 'Picture Quest',
+        game_type: 'guess_game',
+      };
+
+      const lemonQ: Question = {
+        id: '0947ac26-280c-4a53-9234-3bec4906e651',
+        game_id: '9e0aea7c-24a1-437b-89bd-11cd64b2d315',
+        subcategory_id: 'sub-1',
+        level_id: 'lvl-1',
+        question_text: 'Which one is a Lemon?',
+        question_type: 'find_correct_picture',
+        sort_order: 1,
+        is_draft: false,
+        image_asset_id: 'img-asset-1',
+        audio_asset_id: 'audio-asset-1',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        options: [
+          { id: 'o-lemon-1', question_id: '0947ac26-280c-4a53-9234-3bec4906e651', option_text: 'Lemon', is_correct: true, sort_order: 1, media_asset_id: 'img-asset-1', created_at: new Date().toISOString() },
+          { id: 'o-lemon-2', question_id: '0947ac26-280c-4a53-9234-3bec4906e651', option_text: 'Apple', is_correct: false, sort_order: 2, media_asset_id: 'img-asset-1', created_at: new Date().toISOString() },
+          { id: 'o-lemon-3', question_id: '0947ac26-280c-4a53-9234-3bec4906e651', option_text: 'Banana', is_correct: false, sort_order: 3, media_asset_id: 'option-img-asset-1', created_at: new Date().toISOString() },
+          { id: 'o-lemon-4', question_id: '0947ac26-280c-4a53-9234-3bec4906e651', option_text: 'Orange', is_correct: false, sort_order: 4, media_asset_id: 'option-img-asset-1', created_at: new Date().toISOString() },
+        ],
+      };
+
+      const pqLevel: GameLevel = { ...validLevel, game_id: '9e0aea7c-24a1-437b-89bd-11cd64b2d315' };
+      const report = validateActivityForPublication(pqGame, [lemonQ], allAssets, new Set(['sub-1']), [pqLevel]);
+      expect(report.eligible).toBe(true);
+      expect(report.snapshot?.questions[0].options).toHaveLength(4);
+      expect(report.snapshot?.questions[0].options.filter((o) => o.is_correct)).toHaveLength(1);
+      expect(report.snapshot?.referenced_assets).toHaveLength(3);
     });
   });
 

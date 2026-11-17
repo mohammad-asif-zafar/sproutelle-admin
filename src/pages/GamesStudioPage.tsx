@@ -15,7 +15,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Game, GameCategory, MediaAsset } from '../types/database';
 import { GAME_ENGINE_REGISTRY, type EngineType } from '../types/engine';
 import { validateActivityForPublication, type ValidationReport } from '../lib/publisher';
-import { loadPublicationData } from '../lib/validation/queryParser';
+import { loadPublicationData, executePublishReleaseRPC } from '../lib/validation/queryParser';
 import { Modal } from '../components/Common/Modal';
 
 export const GamesStudioPage: React.FC = () => {
@@ -23,6 +23,7 @@ export const GamesStudioPage: React.FC = () => {
   const [categories, setCategories] = useState<GameCategory[]>([]);
   const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
   const [gameQuestionCountMap, setGameQuestionCountMap] = useState<Map<string, number>>(new Map());
+  const [gameActiveReleaseMap, setGameActiveReleaseMap] = useState<Map<string, string>>(new Map());
   const [gameQuestionCountError, setGameQuestionCountError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(isSupabaseConfigured);
   const [pageError, setPageError] = useState<string | null>(
@@ -78,7 +79,7 @@ export const GamesStudioPage: React.FC = () => {
     try {
       setPageError(null);
 
-      const [gamesRes, catRes, mediaRes, qRes] = await Promise.all([
+      const [gamesRes, catRes, mediaRes, qRes, releasesRes] = await Promise.all([
         supabase
           .from('games')
           .select('*, category:game_categories(*)')
@@ -86,6 +87,7 @@ export const GamesStudioPage: React.FC = () => {
         supabase.from('game_categories').select('*').order('sort_order'),
         supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
         supabase.from('questions').select('game_id'),
+        supabase.from('game_releases').select('game_id, version_number').eq('is_active', true),
       ]);
 
       if (gamesRes.error) throw gamesRes.error;
@@ -106,6 +108,14 @@ export const GamesStudioPage: React.FC = () => {
         setGameQuestionCountMap(qMap);
       }
 
+      if (releasesRes.data) {
+        const releaseMap = new Map<string, string>();
+        (releasesRes.data as Array<{ game_id: string; version_number: string }>).forEach((r) => {
+          if (r.game_id && r.version_number) releaseMap.set(r.game_id, r.version_number);
+        });
+        setGameActiveReleaseMap(releaseMap);
+      }
+
       setGamesList((gamesRes.data as Game[]) || []);
       if (catRes.data) setCategories(catRes.data as GameCategory[]);
       if (mediaRes.data) setMediaAssets(mediaRes.data as MediaAsset[]);
@@ -124,7 +134,7 @@ export const GamesStudioPage: React.FC = () => {
 
     async function init() {
       try {
-        const [gamesRes, catRes, mediaRes, qRes] = await Promise.all([
+        const [gamesRes, catRes, mediaRes, qRes, releasesRes] = await Promise.all([
           supabase
             .from('games')
             .select('*, category:game_categories(*)')
@@ -132,6 +142,7 @@ export const GamesStudioPage: React.FC = () => {
           supabase.from('game_categories').select('*').order('sort_order'),
           supabase.from('media_assets').select('*').order('created_at', { ascending: false }),
           supabase.from('questions').select('game_id'),
+          supabase.from('game_releases').select('game_id, version_number').eq('is_active', true),
         ]);
 
         if (!isMounted) return;
@@ -152,6 +163,14 @@ export const GamesStudioPage: React.FC = () => {
             }
           });
           setGameQuestionCountMap(qMap);
+        }
+
+        if (releasesRes.data) {
+          const releaseMap = new Map<string, string>();
+          (releasesRes.data as Array<{ game_id: string; version_number: string }>).forEach((r) => {
+            if (r.game_id && r.version_number) releaseMap.set(r.game_id, r.version_number);
+          });
+          setGameActiveReleaseMap(releaseMap);
         }
 
         if (!isMounted) return;
@@ -344,16 +363,17 @@ export const GamesStudioPage: React.FC = () => {
       setPublishErrorMsg(null);
       setPublishSuccessMsg(null);
 
-      const { data, error } = await supabase.rpc('publish_game_release', {
-        p_game_id: previewGame.id,
-        p_version_number: validationReport.snapshot.pack_version,
-        p_pack_data: validationReport.snapshot,
-      });
+      const publishResult = await executePublishReleaseRPC(
+        previewGame.id,
+        validationReport.snapshot,
+        supabase
+      );
 
-      if (error) throw error;
-      if (data === false) throw new Error('Publish function returned false.');
+      if (!publishResult.success) {
+        throw new Error(publishResult.error || 'Database publication failed.');
+      }
 
-      setPublishSuccessMsg(`Successfully published version ${validationReport.snapshot.pack_version} to Supabase!`);
+      setPublishSuccessMsg(`Successfully published release v${publishResult.version} to Supabase! Active release verified in database.`);
       await loadData();
     } catch (err) {
       console.error('Failed publishing release to Supabase:', err);
@@ -532,9 +552,20 @@ export const GamesStudioPage: React.FC = () => {
                         )}
                       </td>
                       <td style={{ padding: '0.875rem 1rem' }}>
-                        <span className={`badge ${game.is_published ? 'badge-success' : 'badge-warning'}`}>
-                          {game.is_published ? 'Published' : 'Draft'}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          <span className={`badge ${game.is_published ? 'badge-success' : 'badge-warning'}`}>
+                            {game.is_published ? 'Published' : 'Draft'}
+                          </span>
+                          {gameActiveReleaseMap.get(game.id) ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--color-success)', fontWeight: 600 }}>
+                              Release: v{gameActiveReleaseMap.get(game.id)}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                              No active release
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: '0.375rem' }}>

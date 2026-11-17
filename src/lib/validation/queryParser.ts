@@ -4,6 +4,7 @@
  */
 
 import type { Question, GameLevel } from '../../types/database';
+import type { AdminReleasePackSnapshot } from '../publisher';
 
 export interface PublicationDataLoadResult {
   success: boolean;
@@ -95,6 +96,82 @@ export async function loadPublicationData(
       activeSubcategoryIds: new Set(),
       levels: [],
       error: `Publication Data Load Failure: Could not verify subcategory assignments or questions (${msg}).`,
+    };
+  }
+}
+
+export interface PublishRPCExecutionResult {
+  success: boolean;
+  version?: string;
+  error?: string;
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function executePublishReleaseRPC(
+  gameId: string,
+  snapshot: AdminReleasePackSnapshot,
+  client: any
+): Promise<PublishRPCExecutionResult> {
+  try {
+    const { data, error } = await client.rpc('publish_game_release', {
+      p_game_id: gameId,
+      p_version_number: snapshot.pack_version,
+      p_pack_data: snapshot,
+    });
+
+    if (error) {
+      return {
+        success: false,
+        error: `RPC Execution Error: ${error.message}`,
+      };
+    }
+
+    if (data === false) {
+      return {
+        success: false,
+        error: 'Publish function returned false.',
+      };
+    }
+
+    // Active release post-publication verification
+    const { data: releaseData, error: releaseErr } = await client
+      .from('game_releases')
+      .select('id, version_number, is_active')
+      .eq('game_id', gameId)
+      .eq('is_active', true);
+
+    if (releaseErr) {
+      return {
+        success: false,
+        error: `Publication RPC executed, but active release verification query failed: ${releaseErr.message}`,
+      };
+    }
+
+    const releases = (releaseData as Array<{ id: string; version_number: string; is_active: boolean }>) || [];
+
+    if (releases.length === 0) {
+      return {
+        success: false,
+        error: 'Publication RPC executed, but no active release record was verified in the database.',
+      };
+    }
+
+    if (releases.length > 1) {
+      return {
+        success: false,
+        error: `Publication anomaly: found ${releases.length} active releases for this game. Expected exactly 1 active release.`,
+      };
+    }
+
+    return {
+      success: true,
+      version: snapshot.pack_version,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Database publish failed.';
+    return {
+      success: false,
+      error: msg,
     };
   }
 }
